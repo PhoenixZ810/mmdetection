@@ -21,28 +21,7 @@ def main():
     none_exist=[]
     for dataset in sorted(os.listdir("rf100/")):
         print(f'\ndataset={dataset}, index={num}')
-
-        # determine whether the dataset directory exists
-        try:
-            dirs = [os.path.join(args.work_dirs, dataset, d) for d in os.listdir(os.path.join(args.work_dirs, dataset)) 
-                    if os.path.isdir(os.path.join(args.work_dirs, dataset, d))]
-            num+=1
-        except:
-            print(f"{dataset} directory doesn't exist!")
-            none_exist_num+=1
-            none_exist.append(dataset)
-            continue
-
-        dirs.sort(key=os.path.getmtime)
-        latest_dir = dirs[-1]
-        latest_log_name = latest_dir.split('/')[-1]
-        print('time='+latest_log_name)
-
-        latest_log = latest_dir+f'/{latest_log_name}.log'  # get latest log name
-        print(latest_log)
-
-        with open(latest_log, 'r') as f:
-            log = f.read()
+        num+=1
         with open('rf100/'+dataset+'/train/_annotations.coco.json','r') as f:
             image=json.load(f)
             num_train = len(image['images'])  # get number of train images        
@@ -54,42 +33,64 @@ def main():
             for index in label:
                 if index['name'] == dataset:
                     category = index['category']  # get category of dataset
-        complete_flag=re.findall(r'Epoch\(val\) \[{}\]\[\d+/\d+\]'.format(args.epoch), log)  # find log of args.epoch's validing process
         
-        # Check whether the training is complete
-        if not complete_flag:
-            fail_num+=1
-            fail.append(dataset)
-            print("------------------------------------------------------------------------------------")
-            print(f'{dataset} train failed!')
-            print(f'{fail_num} dataset failed!')
-            print("------------------------------------------------------------------------------------")
-            key_value=[dataset, category, num_train, num_valid, '', '', '', '', '']
-        else:
-            '''match result'''
-            match_all = re.findall(r'The best checkpoint with ([\d.]+) coco/bbox_mAP at ([\d.]+) epoch', log)
-            if match_all:
-                match = match_all[-1]
-                best_epoch = match[-1]
-                print(f'best_epoch={best_epoch}')
-                match_AP = re.findall(r'\[{}\]\[\d+/\d+\]    coco/bbox_mAP: (-?\d+\.?\d*)  coco/bbox_mAP_50: (-?\d+\.?\d*)  coco/bbox_mAP_75: -?\d+\.?\d*  coco/bbox_mAP_s: (-?\d+\.?\d*)  coco/bbox_mAP_m: (-?\d+\.?\d*)  coco/bbox_mAP_l: (-?\d+\.?\d*)'.format(best_epoch), log)
-                print(f'match_AP={match_AP}')
-                
-                key_value = [dataset, category, num_train, num_valid]
-                key_value.extend(match_AP[0])
-            else:
+        # determine whether the dataset directory exists
+        try:
+            dirs = [os.path.join(args.work_dirs, dataset, d) for d in os.listdir(os.path.join(args.work_dirs, dataset)) 
+                    if os.path.isdir(os.path.join(args.work_dirs, dataset, d))]        
+            dirs.sort(key=os.path.getmtime)
+
+            latest_dir = dirs[-1]
+            latest_log_name = latest_dir.split('/')[-1]
+            print('time='+latest_log_name)
+            latest_log = latest_dir+f'/{latest_log_name}.log'  # get latest log name
+            with open(latest_log, 'r') as f:
+                log = f.read()
+            print(latest_log)
+
+            complete_flag=re.findall(r'Epoch\(val\) \[{}\]\[\d+/\d+\]'.format(args.epoch), log)  # find log of args.epoch's validing process
+            
+            # Check whether the training is complete
+            if not complete_flag:
+                fail_num+=1
+                fail.append(dataset)
                 print("------------------------------------------------------------------------------------")
-                print('log has no result!')
+                print(f'{dataset} train failed!')
+                print(f'{fail_num} dataset failed!')
                 print("------------------------------------------------------------------------------------")
                 key_value=[dataset, category, num_train, num_valid, '', '', '', '', '']
-
+            else:
+                '''match result'''
+                match_all = re.findall(r'The best checkpoint with ([\d.]+) coco/bbox_mAP at ([\d.]+) epoch', log)
+                if match_all:
+                    match = match_all[-1]
+                    best_epoch = match[-1]
+                    print(f'best_epoch={best_epoch}')
+                    match_AP = re.findall(r'\[{}\]\[\d+/\d+\]    coco/bbox_mAP: (-?\d+\.?\d*)  coco/bbox_mAP_50: (-?\d+\.?\d*)  coco/bbox_mAP_75: -?\d+\.?\d*  coco/bbox_mAP_s: (-?\d+\.?\d*)  coco/bbox_mAP_m: (-?\d+\.?\d*)  coco/bbox_mAP_l: (-?\d+\.?\d*)'.format(best_epoch), log)
+                    print(f'match_AP={match_AP}')
+                    
+                    key_value = [dataset, category, num_train, num_valid]
+                    key_value.extend(match_AP[0])
+                else:
+                    print("------------------------------------------------------------------------------------")
+                    print('log has no result!')
+                    print("------------------------------------------------------------------------------------")
+                    key_value=[dataset, category, num_train, num_valid, '', '', '', '', '']
+        except:
+            print(f"{dataset} directory doesn't exist!")
+            none_exist_num+=1
+            none_exist.append(dataset)
+            key_value=[dataset, category, num_train, num_valid, '', '', '', '', '']
+            
         if num==1:
             result_csv = os.path.join(args.work_dirs,f'{latest_log_name}_final_eval.csv')
             print(result_csv)
-            with open(result_csv, mode='a') as f:
+            with open(result_csv, mode='w') as f:
                 writer = csv.writer(f)
                 header1 = ['Dataset', 'Category', 'Images', 'Images', args.method, args.method, args.method, args.method, args.method]
                 writer.writerow(header1)
+            with open(result_csv, mode='a') as f:
+                writer = csv.writer(f)
                 header2 = ['', '', 'train', 'valid', 'mAP', 'mAP50', 'mAP_s', 'mAP_m', 'mAP_l']
                 writer.writerow(header2)
                 writer.writerow(key_value)
@@ -111,8 +112,12 @@ def main():
     ws['C1'].alignment = Alignment(horizontal='center', vertical='center')
     ws['E1'].alignment = Alignment(horizontal='center', vertical='center')
     wb.save(result_xlsx)
+
     print(f'{none_exist_num} datasets were not trained:\n{none_exist}\n')
     print(f'{fail_num} training failed:\n{fail}')
+    fail_txt = '{}.txt'.format(result_csv.split('.')[0])
+    with open(fail_txt, 'w') as f:
+        f.write(f'{fail}')
 
 if __name__ == "__main__":
     main()
