@@ -114,10 +114,19 @@ def main():
     wb.save(result_xlsx)
 
     print(f'{none_exist_num} datasets were not trained:\n{none_exist}\n')
-    print(f'{fail_num} training failed:\n{fail}')
+    print(f'{fail_num} training failed:\n{fail}\n')
     fail_txt = '{}.txt'.format(result_csv.split('.')[0])
+
     with open(fail_txt, 'w') as f:
-        f.write(f'{fail}')
+        pass
+    with open(fail_txt, 'a') as f:
+        for item in none_exist:
+            f.write(f'{item}\n')
+        for item in fail:
+            f.write(f'{item}\n')
+
+    print(f'all {fail_num+none_exist_num} untrained datasets have been logged in {fail_txt}!')
+        
 
 if __name__ == "__main__":
     main()
