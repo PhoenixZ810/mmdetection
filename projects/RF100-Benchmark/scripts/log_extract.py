@@ -18,12 +18,17 @@ def parse_args():
                         type=int,
                         default=25,
                         required=False,
-                        help='train_epoch, uesd for checking whether training completed')
+                        help='train_epoch, used for checking whether training completed')
     parser.add_argument('--work-dirs',
                         type=str,
                         default='work_dirs/',
                         required=False,
                         help='directory for saving results')
+    parser.add_argument('--origin',
+                        type=str,
+                        default=False,
+                        required=False,
+                        help='excel with datasets in the order of execution ')
     args = parser.parse_args()
 
     return args
@@ -32,8 +37,11 @@ def write_csv(datas, args):
     num = 0
     fail_num = 0
     none_exist_num = 0
-    fail=[]
-    none_exist=[]
+    fail = []
+    none_exist = []
+    latest_time = 0
+    with open('scripts/labels_names.json') as f:
+        label=json.load(f)
     for dataset in sorted(os.listdir(datas)):
         print(f'\ndataset={dataset}, index={num}')
         num+=1
@@ -43,11 +51,9 @@ def write_csv(datas, args):
         with open(os.path.join(datas, dataset,'valid/_annotations.coco.json'),'r') as f:
             image=json.load(f)
             num_valid = len(image['images'])  # get number of valid images
-        with open('scripts/labels_names.json') as f:
-            label=json.load(f)
-            for index in label:
-                if index['name'] == dataset:
-                    category = index['category']  # get category of dataset
+        for index in label:
+            if index['name'] == dataset:
+                category = index['category']  # get category of dataset
 
         # determine whether the dataset directory exists
         try:
@@ -57,6 +63,8 @@ def write_csv(datas, args):
 
             latest_dir = dirs[-1]
             latest_log_name = latest_dir.split('/')[-1]
+            if int(latest_log_name)>int(latest_time):
+                latest_time = latest_log_name
             print('time='+latest_log_name)
             latest_log = latest_dir+f'/{latest_log_name}.log'  # get latest log name
             with open(latest_log, 'r') as f:
@@ -116,7 +124,7 @@ def write_csv(datas, args):
                 writer = csv.writer(f)
                 writer.writerow(key_value)
 
-    return result_csv, fail, fail_num, none_exist, none_exist_num
+    return result_csv, fail, fail_num, none_exist, none_exist_num, os.path.join(args.work_dirs, latest_time[4:])
 
 def wb_align(file, pair_ls):
     # adjust format of .xlsx file
@@ -163,20 +171,24 @@ def sum_excel(in_csv, out_xlsx):
 def main():
     args = parse_args()
 
-    result_csv, fail, fail_num, none_exist, none_exist_num = write_csv("rf100/", args)
+    result_csv, fail, fail_num, none_exist, none_exist_num, latest_time = write_csv("rf100/", args)
 
-    # write detail
-    df = pd.read_csv(result_csv)
-    result_xlsx_detail = '{}_detail.xlsx'.format(result_csv.split('.')[0])
-    if os.path.exists(result_xlsx_detail):
-        os.remove(result_xlsx_detail)
-    print(f'\n{result_xlsx_detail} created!\n')
-    df.to_excel(result_xlsx_detail)
+    os.rename(result_csv, latest_time+'_eval.csv')
+    result_csv = latest_time+'_eval.csv'
+    # write excel with datasets in the order of execution
+    if(args.origin):
+        df = pd.read_csv(result_csv)
+        result_xlsx_detail = '{}_detail.xlsx'.format(latest_time)
+        if os.path.exists(result_xlsx_detail):
+            os.remove(result_xlsx_detail)
+        print(f'\n{result_xlsx_detail} created!\n')
+        df.to_excel(result_xlsx_detail)
+        wb_align(result_xlsx_detail, [['D1','E1'], ['F1','J1']])
 
-    wb_align(result_xlsx_detail, [['D1','E1'], ['F1','J1']])
 
-    result_xlsx_sort = '{}_detail_sort.xlsx'.format(result_csv.split('.')[0])
-    result_xlsx_sum = '{}_sum.xlsx'.format(result_csv.split('.')[0])
+
+    result_xlsx_sort = '{}_sort.xlsx'.format(latest_time)
+    result_xlsx_sum = '{}_sum.xlsx'.format(latest_time)
     if os.path.exists(result_xlsx_sum):
         os.remove(result_xlsx_sum)
 
@@ -194,7 +206,7 @@ def main():
     ''' generate .txt file '''
     print(f'{none_exist_num} datasets were not trained:\n{none_exist}\n')
     print(f'{fail_num} training failed:\n{fail}\n')
-    fail_txt = '{}.txt'.format(result_csv.split('.')[0])
+    fail_txt = 'failed_dataset_list.txt'
 
     with open(fail_txt, 'w') as f:
         pass
