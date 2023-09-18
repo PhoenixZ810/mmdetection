@@ -9,25 +9,38 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 import numpy as np
 
-parser = argparse.ArgumentParser(description="log_name")
-parser.add_argument("method", type=str, help='method name, used in csv/xlsx header')
-parser.add_argument("epoch", type=int, help = 'train_epoch, uesd for checking whether training completed')
-parser.add_argument('--work_dirs', type=str, default='work_dirs/', required=False, help='directory for saving results')
-args = parser.parse_args()
+def parse_args():
+    parser = argparse.ArgumentParser(description="log_name")
+    parser.add_argument("method",
+                        type=str,
+                        help='method name, used in csv/xlsx header')
+    parser.add_argument("--epoch",
+                        type=int,
+                        default=25,
+                        required=False,
+                        help='train_epoch, uesd for checking whether training completed')
+    parser.add_argument('--work-dirs',
+                        type=str,
+                        default='work_dirs/',
+                        required=False,
+                        help='directory for saving results')
+    args = parser.parse_args()
 
-def write_csv(datas):
+    return args
+
+def write_csv(datas, args):
     num = 0
     fail_num = 0
     none_exist_num = 0
     fail=[]
     none_exist=[]
-    for dataset in sorted(os.listdir("rf100/")):
+    for dataset in sorted(os.listdir(datas)):
         print(f'\ndataset={dataset}, index={num}')
         num+=1
-        with open('rf100/'+dataset+'/train/_annotations.coco.json','r') as f:
+        with open(os.path.join(datas, dataset, 'train/_annotations.coco.json'),'r') as f:
             image=json.load(f)
             num_train = len(image['images'])  # get number of train images
-        with open('rf100/'+dataset+'/valid/_annotations.coco.json','r') as f:
+        with open(os.path.join(datas, dataset,'valid/_annotations.coco.json'),'r') as f:
             image=json.load(f)
             num_valid = len(image['images'])  # get number of valid images
         with open('scripts/labels_names.json') as f:
@@ -148,8 +161,9 @@ def sum_excel(in_csv, out_xlsx):
     df_new.to_excel(out_xlsx, float_format='%.4f', index=False)
 
 def main():
+    args = parse_args()
 
-    result_csv, fail, fail_num, none_exist, none_exist_num = write_csv("rf_100/")
+    result_csv, fail, fail_num, none_exist, none_exist_num = write_csv("rf100/", args)
 
     # write detail
     df = pd.read_csv(result_csv)
@@ -195,4 +209,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-     
