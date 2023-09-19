@@ -62,6 +62,7 @@ def write_csv(datas, args):
         for index in label:
             if index['name'] == dataset:
                 category = index['category']  # get category of dataset
+                class_num = len(index['classes'].keys())
 
         # determine whether the dataset directory exists
         try:
@@ -99,7 +100,7 @@ def write_csv(datas, args):
                     '------------------------------------------------------------------------------------'
                 )
                 key_value = [
-                    dataset, category, num_train, num_valid, '', '', '', '', ''
+                    dataset, category, class_num, num_train, num_valid, '', '', '', '', ''
                 ]
             else:
                 """match result."""
@@ -116,7 +117,7 @@ def write_csv(datas, args):
                         .format(best_epoch), log)
                     print(f'match_AP={match_AP}')
 
-                    key_value = [dataset, category, num_train, num_valid]
+                    key_value = [dataset, category, class_num, num_train, num_valid]
                     key_value.extend(match_AP[0])
                 else:
                     print(
@@ -127,7 +128,7 @@ def write_csv(datas, args):
                         '------------------------------------------------------------------------------------'
                     )
                     key_value = [
-                        dataset, category, num_train, num_valid, '', '', '',
+                        dataset, category, class_num, num_train, num_valid, '', '', '',
                         '', ''
                     ]
         except:
@@ -145,14 +146,14 @@ def write_csv(datas, args):
             with open(result_csv, mode='w') as f:
                 writer = csv.writer(f)
                 header1 = [
-                    'Dataset', 'Category', 'Images', 'Images', args.method,
+                    'Dataset', 'Category', 'Classes', 'Images', 'Images', args.method,
                     args.method, args.method, args.method, args.method
                 ]
                 writer.writerow(header1)
             with open(result_csv, mode='a') as f:
                 writer = csv.writer(f)
                 header2 = [
-                    'Dataset', 'Category', 'train', 'valid', 'mAP', 'mAP50',
+                    'Dataset', 'Category', 'Classes', 'train', 'valid', 'mAP', 'mAP50',
                     'mAP_s', 'mAP_m', 'mAP_l'
                 ]
                 writer.writerow(header2)
@@ -189,6 +190,7 @@ def sort_excel(in_csv, out_xlsx):
 def sum_excel(in_csv, out_xlsx):
     # read csv with two headers then convert it to xlsx, get total number of train&valid images and mean of results
     df = pd.read_csv(in_csv)
+    df.insert(2, 'dataset', pd.Series([]))
     df = df.iloc[:, 1:]
     average = df.iloc[1:].groupby('Category')  # group by category name
     df_new = df.iloc[0:1, :]
@@ -196,8 +198,10 @@ def sum_excel(in_csv, out_xlsx):
     for key, value in average:
         num += 1
         df_cate = [key]
-        for i in range(1, 8):
-            if i == 1 or i == 2:
+        for i in range(1, 10):
+            if i==1:
+                df_cate.append(len(value))
+            elif i!=1 and i<5:
                 df_cate.append(value.iloc[:, i].astype(float).sum())
             else:
                 df_cate.append(
@@ -205,11 +209,12 @@ def sum_excel(in_csv, out_xlsx):
                         value.iloc[:, i].astype(float).replace('',
                                                                np.nan).mean(),
                         '.4f'))
+        # import pdb;pdb.set_trace()
         df_new.loc[len(df_new)] = df_cate
 
     df_cate = ['total']  # final row = 'total'
-    for i in range(1, 8):
-        if i == 1 or i == 2:
+    for i in range(1, 10):
+        if i<5:
             df_cate.append(df_new.iloc[1:, i].astype(float).sum())
         else:
             df_cate.append(
@@ -230,6 +235,9 @@ def main():
     os.rename(result_csv, latest_time + '_eval.csv')
     result_csv = latest_time + '_eval.csv'
 
+    # result_csv = 'work_dirs/0919_161800_eval.csv'
+    # latest_time = '0919_161800'
+
     # write excel in the order of execution
     if (args.origin):
         df = pd.read_csv(result_csv)
@@ -238,7 +246,7 @@ def main():
             os.remove(result_xlsx_detail)
         print(f'\n{result_xlsx_detail} created!\n')
         df.to_excel(result_xlsx_detail)
-        wb_align(result_xlsx_detail, [['D1', 'E1'], ['F1', 'J1']])
+        wb_align(result_xlsx_detail, [['E1', 'F1'], ['G1', 'K1']])
 
     # write excel in the order of category&dataset name
     result_xlsx_sort = '{}_detail.xlsx'.format(latest_time)
@@ -248,30 +256,30 @@ def main():
 
     # sortec by category name
     sort_excel(result_csv, result_xlsx_sort)
-    wb_align(result_xlsx_sort, [['C1', 'D1'], ['E1', 'I1']])
+    wb_align(result_xlsx_sort, [['D1', 'E1'], ['F1', 'J1']])
 
     # sum of each category
     sum_excel(result_csv, result_xlsx_sum)
-    wb_align(result_xlsx_sum, [['A1', 'A2'], ['B1', 'C1'], ['D1', 'H1']])
+    wb_align(result_xlsx_sum, [['A1', 'A2'], ['B1', 'B2'], ['C1', 'C2'], ['D1', 'E1'], ['F1', 'J1']])
 
-    # wb.save(result_xlsx_sum)
-    print(f'sum_file = {result_xlsx_sum}')
-    ''' generate .txt file '''
-    print(f'{none_exist_num} datasets were not trained:\n{none_exist}\n')
-    print(f'{fail_num} training failed:\n{fail}\n')
+    # # save fail
+    # print(f'sum_file = {result_xlsx_sum}')
+    # ''' generate .txt file '''
+    # print(f'{none_exist_num} datasets were not trained:\n{none_exist}\n')
+    # print(f'{fail_num} training failed:\n{fail}\n')
 
-    fail_txt = os.path.join(args.work_dirs, 'failed_dataset_list.txt')
-    with open(fail_txt, 'w') as f:
-        pass
-    with open(fail_txt, 'a') as f:
-        for item in none_exist:
-            f.write(f'{item}\n')
-        for item in fail:
-            f.write(f'{item}\n')
+    # fail_txt = os.path.join(args.work_dirs, 'failed_dataset_list.txt')
+    # with open(fail_txt, 'w') as f:
+    #     pass
+    # with open(fail_txt, 'a') as f:
+    #     for item in none_exist:
+    #         f.write(f'{item}\n')
+    #     for item in fail:
+    #         f.write(f'{item}\n')
 
-    print(
-        f'all {fail_num+none_exist_num} untrained datasets have been logged in {fail_txt}!'
-    )
+    # print(
+    #     f'all {fail_num+none_exist_num} untrained datasets have been logged in {fail_txt}!'
+    # )
 
 
 if __name__ == '__main__':
