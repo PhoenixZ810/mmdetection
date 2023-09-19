@@ -175,10 +175,11 @@ def main():
 
     os.rename(result_csv, latest_time+'_eval.csv')
     result_csv = latest_time+'_eval.csv'
-    # write excel with datasets in the order of execution
+
+    # write excel in the order of execution
     if(args.origin):
         df = pd.read_csv(result_csv)
-        result_xlsx_detail = '{}_detail.xlsx'.format(latest_time)
+        result_xlsx_detail = '{}_origin.xlsx'.format(latest_time)
         if os.path.exists(result_xlsx_detail):
             os.remove(result_xlsx_detail)
         print(f'\n{result_xlsx_detail} created!\n')
@@ -186,8 +187,8 @@ def main():
         wb_align(result_xlsx_detail, [['D1','E1'], ['F1','J1']])
 
 
-
-    result_xlsx_sort = '{}_sort.xlsx'.format(latest_time)
+    # write excel in the order of category&dataset name
+    result_xlsx_sort = '{}_detail.xlsx'.format(latest_time)
     result_xlsx_sum = '{}_sum.xlsx'.format(latest_time)
     if os.path.exists(result_xlsx_sum):
         os.remove(result_xlsx_sum)
