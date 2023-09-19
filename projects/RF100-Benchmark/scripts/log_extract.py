@@ -36,7 +36,6 @@ def parse_args():
 
     return args
 
-
 def write_csv(datas, args):
     num = 0
     fail_num = 0
