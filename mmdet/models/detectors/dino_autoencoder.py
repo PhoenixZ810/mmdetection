@@ -15,11 +15,12 @@ from .dino import DINO
 @MODELS.register_module()
 class DINO_autoencoder(DINO):
 
-    def __init__(self, *args, backbone2: ConfigType, backbone3: ConfigType,
+    def __init__(self, *args,
+                #  backbone2: ConfigType, backbone3: ConfigType,
                  **kwargs):
         super().__init__(*args, **kwargs)
-        self.backbone2 = MODELS.build(backbone2)
-        self.backbone3 = MODELS.build(backbone3)
+        # self.backbone2 = MODELS.build(backbone2)
+        # self.backbone3 = MODELS.build(backbone3)
 
     def extract_feat(self, batch_inputs: Tensor) -> Tuple[Tensor]:
         """Extract features.
@@ -32,14 +33,16 @@ class DINO_autoencoder(DINO):
             has shape (bs, dim, H, W).
         """
         with torch.no_grad():
+            import pdb;pdb.set_trace()
             x1 = self.backbone(batch_inputs)
             feature_vision(x1[0][0], 'x1_512')
             feature_vision(x1[1][0], 'x1_1024')
             feature_vision(x1[2][0], 'x1_2048')
-            x2 = self.backbone2(batch_inputs)
-            feature_vision(x2[0], 'x2', 4)
-            x3 = self.backbone3(batch_inputs)
-            feature_vision(x3[0], 'x3')
+            # x2 = self.backbone2(batch_inputs)
+            # feature_vision(x2[0], 'x2', 4)
+
+            # x3 = self.backbone3(batch_inputs)
+            # feature_vision(x3[0], 'x3')
         import pdb
         pdb.set_trace()
         if self.with_neck:
