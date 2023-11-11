@@ -117,7 +117,7 @@ class RandomSamplingNegPos(BaseTransform):
             gt_bboxes = gt_bboxes.tensor
         gt_labels = results['gt_bboxes_labels']
         original_box_num = len(gt_labels)
-        if 'mixed_sentence' not in results:
+        if 'mixed_sentence' not in results:  # OD data
             text = results['text']
             gt_bboxes, gt_labels, positive_caption_length = check_for_positive_overflow(
                 gt_bboxes, gt_labels, text, self.tokenizer, self.max_tokens
@@ -185,7 +185,7 @@ class RandomSamplingNegPos(BaseTransform):
             label_to_positions, pheso_caption = generate_senetence_given_labels(
                 positive_label_list, negative_label_list, text
             )
-        else:
+        else:  # grounding data
             text = results['text']
             check_for_positive_overflow(
                 gt_bboxes,
