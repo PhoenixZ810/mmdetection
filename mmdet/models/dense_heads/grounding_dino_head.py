@@ -171,7 +171,7 @@ class GroundingDINOHead(DINOHead):
         num_bboxes = bbox_pred.size(0)
         # convert bbox_pred from xywh, normalized to xyxy, unnormalized
         bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
-        bbox_pred = bbox_pred * factor
+        bbox_pred = bbox_pred * factor  # 缩放回标签尺度大小
 
         pred_instances = InstanceData(scores=cls_score, bboxes=bbox_pred)
         # assigner and sampler
@@ -251,13 +251,13 @@ class GroundingDINOHead(DINOHead):
         all_layers_outputs_classes = []
         all_layers_outputs_coords = []
 
-        for layer_id in range(hidden_states.shape[0]):
+        for layer_id in range(hidden_states.shape[0]):  # len layer_num
             reference = inverse_sigmoid(references[layer_id])
             # NOTE The last reference will not be used.
             hidden_state = hidden_states[layer_id]
             outputs_class = self.cls_branches[layer_id](hidden_state,
                                                         memory_text,
-                                                        text_token_mask)
+                                                        text_token_mask)  # contrastive embedding
             tmp_reg_preds = self.reg_branches[layer_id](hidden_state)
             if reference.shape[-1] == 4:
                 # When `layer` is 0 and `as_two_stage` of the detector
@@ -274,8 +274,8 @@ class GroundingDINOHead(DINOHead):
             all_layers_outputs_classes.append(outputs_class)
             all_layers_outputs_coords.append(outputs_coord)
 
-        all_layers_outputs_classes = torch.stack(all_layers_outputs_classes)
-        all_layers_outputs_coords = torch.stack(all_layers_outputs_coords)
+        all_layers_outputs_classes = torch.stack(all_layers_outputs_classes)  # [6,4,num_query+dn_query,256]
+        all_layers_outputs_coords = torch.stack(all_layers_outputs_coords)  # [6,4,num_query+dn_query,4]
 
         return all_layers_outputs_classes, all_layers_outputs_coords
 
@@ -515,7 +515,7 @@ class GroundingDINOHead(DINOHead):
             `loss_iou`.
         """
         num_imgs = cls_scores.size(0)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
+        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]  # 4*[900,256]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
         with torch.no_grad():
             cls_reg_targets = self.get_targets(cls_scores_list,
