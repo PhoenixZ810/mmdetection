@@ -2,9 +2,10 @@ _base_ = [
     '../_base_/datasets/coco_detection.py',
     '../_base_/schedules/schedule_1x.py', '../_base_/default_runtime.py'
 ]
-pretrained = 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth'  # noqa
-lang_model_name = 'bert-base-uncased'
-
+# pretrained = 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth'  # noqa
+# lang_model_name = 'bert-base-uncased'
+pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
+lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 model = dict(
     type='GroundingDINO',
     num_queries=900,
@@ -182,7 +183,7 @@ test_pipeline = [
 ]
 
 dataset_type = 'ODVGDataset'
-data_root = 'data/coco/'
+data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
 
 coco_od_dataset = dict(
     type=dataset_type,
@@ -195,6 +196,18 @@ coco_od_dataset = dict(
     return_classes=True,
     backend_args=None)
 
+o365v1_od_dataset = dict(
+    type=dataset_type,
+    data_root=data_root,
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/mmdetection/data/odvg/o365v1_train_odvg.jsonl',
+    label_map_file='/mnt/data/mmperc/zhaoxiangyu/mmdetection/data/odvg/label_map/o365v1_label_map.json',
+    data_prefix=dict(img='train/'),
+    filter_cfg=dict(filter_empty_gt=False),
+    pipeline=train_pipeline,
+    return_classes=True,
+    backend_args=None,
+)
+
 train_dataloader = dict(
     _delete_=True,
     batch_size=4,
@@ -202,7 +215,7 @@ train_dataloader = dict(
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
-    dataset=dict(type='ConcatDataset', datasets=[coco_od_dataset]))
+    dataset=dict(type='ConcatDataset', datasets=[o365v1_od_dataset]))
 
 val_dataloader = dict(
     dataset=dict(pipeline=test_pipeline, return_classes=True))

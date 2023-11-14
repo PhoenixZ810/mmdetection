@@ -89,10 +89,12 @@ id_map = {
     76: 87,
     77: 88,
     78: 89,
-    79: 90
+    79: 90,
 }
-key_list = list(id_map.keys())
-val_list = list(id_map.values())
+key_list_coco = list(id_map.keys())
+val_list_coco = list(id_map.values())
+key_list_o365 = [i for i in range(365)]
+val_list_o365 = [i for i in range(1, 366)]
 
 
 def dump_label_map(output='./out.json'):
@@ -176,7 +178,7 @@ def dump_label_map(output='./out.json'):
         '87': 'scissors',
         '88': 'teddy bear',
         '89': 'hair drier',
-        '90': 'toothbrush'
+        '90': 'toothbrush',
     }
     new_map = {}
     for key, value in ori_map.items():
@@ -188,52 +190,70 @@ def dump_label_map(output='./out.json'):
         json.dump(new_map, f)
 
 
+def dump_o365_label_map(args):
+    with open(args.input, 'r') as f:
+        j = json.load(f)
+    o_dict = {}
+    for category in j['categories']:
+        index = str(int(category['id']) - 1)
+        name = category['name']
+        o_dict[index] = name
+    with open(args.output, 'w') as f:
+        json.dump(o_dict, f)
+
+
 def coco2odvg(args):
     coco = COCO(args.input)
     cats = coco.loadCats(coco.getCatIds())
     nms = {cat['id']: cat['name'] for cat in cats}
     metas = []
-    out_path = args.input[:-5] + '_od.json'
-
+    if args.dataset == coco:
+        key_list = key_list_coco
+        val_list = val_list_coco
+    else:
+        key_list = key_list_o365
+        val_list = val_list_o365
     for img_id, img_info in tqdm(coco.imgs.items()):
-        ann_ids = coco.getAnnIds(imgIds=img_id)
-        instance_list = []
-        for ann_id in ann_ids:
-            ann = coco.anns[ann_id]
+        if args.dataset == 'o365v2' and img_id in [908726, 320532, 320534]:
+            print(img_info["file_name"])
+            continue
+        if args.dataset == 'o365v1' and img_id in [6, 19, 23]:
+            print(img_info["file_name"])
+            continue
+        else:
+            ann_ids = coco.getAnnIds(imgIds=img_id)
+            instance_list = []
+            for ann_id in ann_ids:
+                ann = coco.anns[ann_id]
+                if ann.get('ignore', False):
+                    continue
+                x1, y1, w, h = ann['bbox']
+                inter_w = max(0, min(x1 + w, img_info['width']) - max(x1, 0))
+                inter_h = max(0, min(y1 + h, img_info['height']) - max(y1, 0))
+                if inter_w * inter_h == 0:
+                    continue
+                if ann['area'] <= 0 or w < 1 or h < 1:
+                    continue
 
-            if ann.get('ignore', False):
-                continue
-            x1, y1, w, h = ann['bbox']
-            inter_w = max(0, min(x1 + w, img_info['width']) - max(x1, 0))
-            inter_h = max(0, min(y1 + h, img_info['height']) - max(y1, 0))
-            if inter_w * inter_h == 0:
-                continue
-            if ann['area'] <= 0 or w < 1 or h < 1:
-                continue
+                if ann.get('iscrowd', False):
+                    continue
 
-            if ann.get('iscrowd', False):
-                continue
-
-            bbox_xyxy = [x1, y1, x1 + w, y1 + h]
-            label = ann['category_id']
-            category = nms[label]
-            ind = val_list.index(label)
-            label_trans = key_list[ind]
-            instance_list.append({
-                'bbox': bbox_xyxy,
-                'label': label_trans,
-                'category': category
-            })
-        metas.append({
-            'filename': img_info['file_name'],
-            'height': img_info['height'],
-            'width': img_info['width'],
-            'detection': {
-                'instances': instance_list
-            }
-        })
+                bbox_xyxy = [x1, y1, x1 + w, y1 + h]
+                label = ann['category_id']
+                category = nms[label]
+                ind = val_list.index(label)
+                label_trans = key_list[ind]
+                instance_list.append({'bbox': bbox_xyxy, 'label': label_trans, 'category': category})
+            metas.append(
+                {
+                    'filename': img_info['file_name'],
+                    'height': img_info['height'],
+                    'width': img_info['width'],
+                    'detection': {'instances': instance_list},
+                }
+            )
     print('  == dump meta ...')
-    with jsonlines.open(out_path, mode='w') as writer:
+    with jsonlines.open(args.output, mode='w') as writer:
         writer.write_all(metas)
     print('  == done.')
 
@@ -241,6 +261,15 @@ def coco2odvg(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('coco to odvg format.', add_help=True)
     parser.add_argument('input', type=str, help='input list name')
+    parser.add_argument("output", type=str, help="output list name")
+    parser.add_argument(
+        "--dataset",
+        '-d',
+        required=True,
+        type=str,
+        help='coco or o365v2 or o365v1',
+        choices=['coco', 'o365v2', 'o365v1'],
+    )
     args = parser.parse_args()
 
     coco2odvg(args)
