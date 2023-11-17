@@ -192,6 +192,7 @@ train_pipeline = [
             'text',
             'custom_entities',
             'tokens_positive',
+            'dataset_mode'
         ),
     ),
 ]
