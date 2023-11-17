@@ -30,7 +30,8 @@ def check_caption(cap):
     if not str.isascii(check_anno):
         return False
     # "The view is better from here 🦅 (Chouf" wtf??
-    check_list = {"↙️", "-", ",", " ", "*", "/", "$", "[CLS]", "[SEP]", "?"}
+    # check_list = {"↙️", "-", ",", " ", "*", "/", "$", "[CLS]", "[SEP]", "?"}
+    check_list = {"↙️", " ", "*", "/", "$", "[CLS]", "[SEP]", "?"}
     for ch in check_list:
         if ch in check_anno:
             return False
@@ -74,17 +75,17 @@ def get_regions(nc, anno):
             box_small, out_range = check_box(box, w, h)
             out_ranges += 1 if out_range == True else 0
             if not box_small:
-                return None
+                return None, out_ranges
             else:
                 bbox.append(box)
     else:
         phrase = clean_span(anno["caption"][int(nc[0]) : int(nc[1])])
-        index = [int(nc[0]), int(nc[1])]
+        index = [[int(nc[0]), int(nc[1])]]
         bbox = [round(nc[2] * w, 3), round(nc[3] * h, 3), round(nc[4] * w, 3), round(nc[5] * h, 3)]
         box_small, out_range = check_box(bbox, w, h)
         out_ranges += 1 if out_range == True else 0
         if not box_small:
-            return None
+            return None, out_ranges
 
     return {"phrase": phrase, "tokens_positive": index, "bbox": bbox}, out_ranges
 
@@ -123,7 +124,9 @@ def process_json(js, args):
             out_ranges += out_range_per_image
         else:
             caption_false += 1
-    print(f"images num in {js} = {metas_len}, after filter: {len(odvg)}, num of existing boxes out of range: {out_ranges}")
+    print(
+        f"images num in {js} = {metas_len}, after filter: {len(odvg)}, num of existing boxes out of range: {out_ranges}"
+    )
     print(f"caption false: {caption_false}, box too small: {box_small}")
     odvg = list(filter(None, odvg))
     return odvg
