@@ -86,7 +86,7 @@ def get_regions(nc, anno):
         if not box_small:
             return None
 
-    return {"phrase": phrase, "index": index, "bbox": bbox}, out_ranges
+    return {"phrase": phrase, "tokens_positive": index, "bbox": bbox}, out_ranges
 
 
 # '''从所有图片中选择random_sampled张图片'''
