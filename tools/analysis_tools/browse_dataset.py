@@ -15,16 +15,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Browse a dataset')
     parser.add_argument('config', help='train config file path')
     parser.add_argument(
-        '--output-dir',
-        default=None,
-        type=str,
-        help='If there is no display interface, you can save it')
+        '--output-dir', default=None, type=str, help='If there is no display interface, you can save it'
+    )
     parser.add_argument('--not-show', default=False, action='store_true')
-    parser.add_argument(
-        '--show-interval',
-        type=float,
-        default=2,
-        help='the interval of show (s)')
+    parser.add_argument('--show-interval', type=float, default=2, help='the interval of show (s)')
     parser.add_argument(
         '--cfg-options',
         nargs='+',
@@ -34,7 +28,8 @@ def parse_args():
         'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
         'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
         'Note that the quotation marks are necessary and that no white space '
-        'is allowed.')
+        'is allowed.',
+    )
     args = parser.parse_args()
     return args
 
@@ -59,9 +54,7 @@ def main():
         gt_instances = data_sample.gt_instances
         img_path = osp.basename(item['data_samples'].img_path)
 
-        out_file = osp.join(
-            args.output_dir,
-            osp.basename(img_path)) if args.output_dir is not None else None
+        out_file = osp.join(args.output_dir, osp.basename(img_path)) if args.output_dir is not None else None
 
         img = img[..., [2, 1, 0]]  # bgr to rgb
         gt_bboxes = gt_instances.get('bboxes', None)
@@ -80,7 +73,8 @@ def main():
             draw_pred=False,
             show=not args.not_show,
             wait_time=args.show_interval,
-            out_file=out_file)
+            out_file=out_file,
+        )
 
         progress_bar.update()
 
