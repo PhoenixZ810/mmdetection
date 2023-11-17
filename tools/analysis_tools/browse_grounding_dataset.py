@@ -144,7 +144,9 @@ def main():
                 end_index += len(w)
                 is_find = False
                 for i, positive in enumerate(gt_tokens_positive):
+                    print(positive)
                     for p in positive:
+
                         if start_index >= p[0] and end_index <= p[1]:
                             characters.append([w, colors[i]])
                             is_find = True
