@@ -68,7 +68,7 @@ def get_regions(nc, anno):
     out_ranges = 0
     if not isinstance(nc, list):
         phrase = clean_span(anno["caption"][int(nc[0][0]) : int(nc[0][1])])
-        index = [int(nc[0][0]), int(nc[0][1])]
+        index = [[int(nc[0][0]), int(nc[0][1])]]
         bbox = []
         for noun in nc:
             box = [round(noun[2] * w, 3), round(noun[3] * h, 3), round(noun[4] * w, 3), round(noun[5] * h, 3)]
