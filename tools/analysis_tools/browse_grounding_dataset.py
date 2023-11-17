@@ -100,11 +100,14 @@ def main():
 
         gt_labels = gt_instances.labels
 
-        base_name, extension = osp.splitext(item['data_samples'].img_path)
+        base_name = osp.basename(item['data_samples'].img_path)
+        name, extension = osp.splitext(base_name)
 
-        out_file = osp.join(
-            args.output_dir,
-            base_name+"_"+str(i)+extension) if args.output_dir is not None else None
+        out_file = (
+            osp.join(args.output_dir, name + "_" + str(i) + extension)
+            if args.output_dir is not None
+            else None
+        )
 
         img = img[..., [2, 1, 0]]  # bgr to rgb
         gt_bboxes = gt_instances.get('bboxes', None)
@@ -144,9 +147,7 @@ def main():
                 end_index += len(w)
                 is_find = False
                 for i, positive in enumerate(gt_tokens_positive):
-                    print(positive)
                     for p in positive:
-
                         if start_index >= p[0] and end_index <= p[1]:
                             characters.append([w, colors[i]])
                             is_find = True
@@ -196,7 +197,7 @@ def main():
 
         if out_file is not None:
             imwrite(drawn_img[..., ::-1], out_file)
-
+        print(out_file)
         progress_bar.update()
 
 

@@ -208,8 +208,8 @@ test_pipeline = [
 ]
 
 dataset_type = 'ODVGDataset'
-# data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
-data_root = '/mnt/workspace/zhaoxiangyu/data/grit_processed/'
+data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
+# data_root = '/mnt/workspace/zhaoxiangyu/data/grit_processed/'
 
 
 coco_od_dataset = dict(
@@ -239,7 +239,7 @@ o365v1_od_dataset = dict(
 grit_od_dataset = dict(
     type=dataset_type,
     data_root=data_root,
-    ann_file='/mnt/workspace/zhaoxiangyu/mmdetection/00000.jsonl',
+    ann_file='/mnt/workspace/zhaoxiangyu/mmdetection/debug.jsonl',
     data_prefix=dict(img='images/'),
     filter_cfg=dict(filter_empty_gt=False),
     pipeline=train_pipeline,
@@ -254,7 +254,7 @@ train_dataloader = dict(
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
-    dataset=dict(type='ConcatDataset', datasets=[grit_od_dataset]),
+    dataset=dict(type='ConcatDataset', datasets=[o365v1_od_dataset]),
 )
 
 val_dataloader = dict(dataset=dict(pipeline=test_pipeline, return_classes=True))
@@ -278,7 +278,7 @@ optim_wrapper = dict(
 max_epochs = 50
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=1000),
-    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[30, 40], gamma=0.1),
+    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[19, 25], gamma=0.1),
 ]
 
 train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval=1)

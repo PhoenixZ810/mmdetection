@@ -32,7 +32,7 @@ class ODVGDataset(BaseDetDataset):
                 self.ann_file, backend_args=self.backend_args) as local_path:
             with open(local_path, 'r') as f:
                 data_list = [json.loads(line) for line in f]
-
+        ignore = 0
         out_data_list = []
         for data in data_list:
             data_info = {}
@@ -51,11 +51,13 @@ class ODVGDataset(BaseDetDataset):
                 for bbox, label in zip(bboxes, bbox_labels):
                     instance = {}
                     x1, y1, x2, y2 = bbox
-                    inter_w = max(0, min(x2, data['height']) - max(x1, 0))
+                    inter_w = max(0, min(x2, data['width']) - max(x1, 0))
                     inter_h = max(0, min(y2, data['height']) - max(y1, 0))
                     if inter_w * inter_h == 0:
+                        ignore += 1
                         continue
                     if (x2 - x1) < 1 or (y2 - y1) < 1:
+                        ignore += 1
                         continue
                     instance['ignore_flag'] = 0
                     instance['bbox'] = bbox
@@ -80,7 +82,7 @@ class ODVGDataset(BaseDetDataset):
                     for box in bbox:
                         instance = {}
                         x1, y1, x2, y2 = box
-                        inter_w = max(0, min(x2, data['height']) - max(x1, 0))
+                        inter_w = max(0, min(x2, data['width']) - max(x1, 0))
                         inter_h = max(0, min(y2, data['height']) - max(y1, 0))
                         if inter_w * inter_h == 0:
                             continue
@@ -99,6 +101,6 @@ class ODVGDataset(BaseDetDataset):
                 data_info['phrases'] = phrases
                 data_info['dataset_mode'] = self.dataset_mode
                 out_data_list.append(data_info)
-
+        print(f'ignore {ignore} instances in o365')
         del data_list
         return out_data_list

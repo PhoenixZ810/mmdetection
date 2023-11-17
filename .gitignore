@@ -121,6 +121,7 @@ mmdet/.mim
 work_dirs/
 grounding_dino_swin1/
 debug/
+GD_o365_new/
 
 # Pytorch
 *.pth
