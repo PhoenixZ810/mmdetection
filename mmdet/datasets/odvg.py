@@ -62,6 +62,7 @@ class ODVGDataset(BaseDetDataset):
                     instance['bbox_label'] = int(label)
                     instances.append(instance)
                 data_info['instances'] = instances
+                data_info['dataset_mode'] = self.dataset_mode
                 out_data_list.append(data_info)
             else:
                 anno = data['grounding']
@@ -73,6 +74,7 @@ class ODVGDataset(BaseDetDataset):
                 for i, region in enumerate(regions):
                     bbox = region['bbox']
                     phrase = region['phrase']
+                    tokens_positive = region['tokens_positive']
                     if not isinstance(bbox[0], list):
                         bbox = [bbox]
                     for box in bbox:
@@ -87,10 +89,15 @@ class ODVGDataset(BaseDetDataset):
                         instance['ignore_flag'] = 0
                         instance['bbox'] = box
                         instance['bbox_label'] = i
-                        phrases[i] = phrase
+                        # phrase only for vis. tokens_positive is important
+                        phrases[i] = {
+                            'phrase': phrase,
+                            'tokens_positive': tokens_positive
+                        }
                         instances.append(instance)
                 data_info['instances'] = instances
                 data_info['phrases'] = phrases
+                data_info['dataset_mode'] = self.dataset_mode
                 out_data_list.append(data_info)
 
         del data_list

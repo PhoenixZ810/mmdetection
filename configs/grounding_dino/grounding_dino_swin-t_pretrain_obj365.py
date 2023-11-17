@@ -207,7 +207,9 @@ test_pipeline = [
 ]
 
 dataset_type = 'ODVGDataset'
-data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
+# data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
+data_root = '/mnt/workspace/zhaoxiangyu/data/grit_processed/'
+
 
 coco_od_dataset = dict(
     type=dataset_type,
@@ -233,6 +235,17 @@ o365v1_od_dataset = dict(
     backend_args=None,
 )
 
+grit_od_dataset = dict(
+    type=dataset_type,
+    data_root=data_root,
+    ann_file='/mnt/workspace/zhaoxiangyu/mmdetection/00000.jsonl',
+    data_prefix=dict(img='images/'),
+    filter_cfg=dict(filter_empty_gt=False),
+    pipeline=train_pipeline,
+    return_classes=True,
+    backend_args=None,
+)
+
 train_dataloader = dict(
     _delete_=True,
     batch_size=4,
@@ -240,7 +253,7 @@ train_dataloader = dict(
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
-    dataset=dict(type='ConcatDataset', datasets=[o365v1_od_dataset]),
+    dataset=dict(type='ConcatDataset', datasets=[grit_od_dataset]),
 )
 
 val_dataloader = dict(dataset=dict(pipeline=test_pipeline, return_classes=True))

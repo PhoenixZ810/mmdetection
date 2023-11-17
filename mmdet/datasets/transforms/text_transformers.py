@@ -5,7 +5,7 @@ from mmdet.registry import TRANSFORMS
 from mmdet.structures.bbox import BaseBoxes
 
 try:
-    from transformers import AutoTokenizer, BertConfig
+    from transformers import AutoTokenizer
     from transformers import BertModel as HFBertModel
 except ImportError:
     AutoTokenizer = None
@@ -93,6 +93,13 @@ def generate_senetence_given_labels(positive_label_list, negative_label_list,
     return label_to_positions, pheso_caption, label_remap_dict
 
 
+def find_substring_indices(string, substring):
+    pattern = re.escape(substring)
+    matches = re.finditer(pattern, string)
+    indices = [(match.start(), match.end()) for match in matches]
+    return indices
+
+
 @TRANSFORMS.register_module()
 class RandomSamplingNegPos(BaseTransform):
 
@@ -131,18 +138,7 @@ class RandomSamplingNegPos(BaseTransform):
         positive_label_list = np.unique(gt_labels).tolist()
         label_to_positions = {}
         for label in positive_label_list:
-            if isinstance(phrases[label], list):
-                positions = []
-                for p in phrases[label]:
-                    start_index = text.find(p.lower())
-                    end_index = start_index + len(p.lower())
-                    positions.append([start_index, end_index])
-                label_to_positions[label] = positions
-            else:
-                phrase = phrases[label].lower()
-                start_index = text.find(phrase)
-                end_index = start_index + len(phrase)
-                label_to_positions[label] = [[start_index, end_index]]
+            label_to_positions[label] = phrases[label]['tokens_positive']
 
         results['gt_bboxes'] = gt_bboxes
         results['gt_bboxes_labels'] = gt_labels
