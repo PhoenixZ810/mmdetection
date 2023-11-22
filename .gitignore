@@ -119,9 +119,11 @@ data
 docs/modelzoo_statistics.md
 mmdet/.mim
 work_dirs/
+work_dir/
 grounding_dino_swin1/
 debug/
 GD_o365_new/
+GD_o365_new_resume/
 
 # Pytorch
 *.pth

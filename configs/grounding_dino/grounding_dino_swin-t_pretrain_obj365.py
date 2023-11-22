@@ -192,7 +192,7 @@ train_pipeline = [
             'text',
             'custom_entities',
             'tokens_positive',
-            'dataset_mode'
+            'dataset_mode',
         ),
     ),
 ]
@@ -209,7 +209,7 @@ test_pipeline = [
 
 dataset_type = 'ODVGDataset'
 data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
-# data_root = '/mnt/workspace/zhaoxiangyu/data/grit_processed/'
+# data_root = '/mnt/data/mmperc/zhaoxiangyu/data/grit_processed/'
 
 
 coco_od_dataset = dict(
@@ -239,7 +239,7 @@ o365v1_od_dataset = dict(
 grit_od_dataset = dict(
     type=dataset_type,
     data_root=data_root,
-    ann_file='/mnt/workspace/zhaoxiangyu/mmdetection/debug.jsonl',
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/open-groundingdino/grit_v0_20000.jsonl',
     data_prefix=dict(img='images/'),
     filter_cfg=dict(filter_empty_gt=False),
     pipeline=train_pipeline,
@@ -263,7 +263,7 @@ test_dataloader = val_dataloader
 optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
-    optimizer=dict(type='AdamW', lr=0.0004, weight_decay=0.0001),  # bs=16 0.0001
+    optimizer=dict(type='AdamW', lr=0.0002, weight_decay=0.0001),  # bs=16 0.0001
     clip_grad=dict(max_norm=0.1, norm_type=2),
     paramwise_cfg=dict(
         custom_keys={
@@ -275,7 +275,7 @@ optim_wrapper = dict(
 )
 
 # learning policy
-max_epochs = 50
+max_epochs = 30
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=1000),
     dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[19, 25], gamma=0.1),
