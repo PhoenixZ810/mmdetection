@@ -106,8 +106,12 @@ class PackDetInputs(BaseTransform):
                     instance_data[self.mapping_table[key]] = results[key]
             else:
                 if 'gt_ignore_flags' in results:
-                    instance_data[self.mapping_table[key]] = to_tensor(
-                        results[key][valid_idx])
+                    try:
+                        instance_data[self.mapping_table[key]] = to_tensor(
+                            results[key][valid_idx])
+                    except:
+                        print('error!')
+                        print('key=', key, 'valid_idx=', valid_idx, 'result=', results)
                     ignore_instance_data[self.mapping_table[key]] = to_tensor(
                         results[key][ignore_idx])
                 else:

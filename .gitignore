@@ -124,6 +124,9 @@ grounding_dino_swin1/
 debug/
 GD_o365_new/
 GD_o365_new_resume/
+vis/
+configs/grounding_dino/cfg_grounding_debug.py
+
 
 # Pytorch
 *.pth

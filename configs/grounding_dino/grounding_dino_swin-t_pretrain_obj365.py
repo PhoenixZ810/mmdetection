@@ -203,13 +203,22 @@ test_pipeline = [
     dict(type='LoadAnnotations', with_bbox=True),
     dict(
         type='PackDetInputs',
-        meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape', 'scale_factor', 'text', 'custom_entities'),
+        meta_keys=(
+            'img_id',
+            'img_path',
+            'ori_shape',
+            'img_shape',
+            'scale_factor',
+            'text',
+            'custom_entities',
+            'tokens_positive',
+        ),
     ),
 ]
 
 dataset_type = 'ODVGDataset'
-data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
-# data_root = '/mnt/data/mmperc/zhaoxiangyu/data/grit_processed/'
+# data_root = '/mnt/data/mmperc/zhaoxiangyu/data/'
+data_root = '/mnt/data/mmperc/zhaoxiangyu/data/'
 
 
 coco_od_dataset = dict(
@@ -227,9 +236,9 @@ coco_od_dataset = dict(
 o365v1_od_dataset = dict(
     type=dataset_type,
     data_root=data_root,
-    ann_file='o365v1_train_odvg.jsonl',
-    label_map_file='o365v1_label_map.json',
-    data_prefix=dict(img='train/'),
+    ann_file='objects365v1_processed/data/o365v1_train_odvg.jsonl',
+    label_map_file='objects365v1_processed/data/o365v1_label_map.json',
+    data_prefix=dict(img='objects365v1_processed/data/train/'),
     filter_cfg=dict(filter_empty_gt=False),
     pipeline=train_pipeline,
     return_classes=True,
@@ -239,8 +248,8 @@ o365v1_od_dataset = dict(
 grit_od_dataset = dict(
     type=dataset_type,
     data_root=data_root,
-    ann_file='/mnt/data/mmperc/zhaoxiangyu/open-groundingdino/grit_v0_20000.jsonl',
-    data_prefix=dict(img='images/'),
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/grounding_mm_mine/grit_try/grit_all_ref_min3.jsonl',
+    data_prefix=dict(img='grit_processed/images/'),
     filter_cfg=dict(filter_empty_gt=False),
     pipeline=train_pipeline,
     return_classes=True,
@@ -251,10 +260,10 @@ train_dataloader = dict(
     _delete_=True,
     batch_size=4,
     num_workers=4,
-    persistent_workers=True,
+    persistent_workers=False,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
-    dataset=dict(type='ConcatDataset', datasets=[o365v1_od_dataset]),
+    dataset=dict(type='ConcatDataset', datasets=[grit_od_dataset, o365v1_od_dataset]),
 )
 
 val_dataloader = dict(dataset=dict(pipeline=test_pipeline, return_classes=True))
@@ -263,7 +272,7 @@ test_dataloader = val_dataloader
 optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
-    optimizer=dict(type='AdamW', lr=0.0002, weight_decay=0.0001),  # bs=16 0.0001
+    optimizer=dict(type='AdamW', lr=0.0004, weight_decay=0.0001),  # bs=16 0.0001
     clip_grad=dict(max_norm=0.1, norm_type=2),
     paramwise_cfg=dict(
         custom_keys={
@@ -275,10 +284,10 @@ optim_wrapper = dict(
 )
 
 # learning policy
-max_epochs = 30
+max_epochs = 20
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=1000),
-    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[19, 25], gamma=0.1),
+    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[10, 15], gamma=0.1),
 ]
 
 train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval=1)
