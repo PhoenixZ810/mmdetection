@@ -113,10 +113,13 @@ data
 *.pkl
 *.pkl.json
 *.log.json
+**.json
+**.jsonl
 docs/modelzoo_statistics.md
 mmdet/.mim
 grounding_dino_swin1/
 work_dirs/
+grounding_dino_swin1/
 
 # Pytorch
 *.pth

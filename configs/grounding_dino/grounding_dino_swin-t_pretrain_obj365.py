@@ -3,9 +3,16 @@ _base_ = [
     '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py',
 ]
+<<<<<<< HEAD
 
 lang_model_name = 'bert-base-uncased'
 
+=======
+# pretrained = 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth'  # noqa
+# lang_model_name = 'bert-base-uncased'
+pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
+lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
 model = dict(
     type='GroundingDINO',
     num_queries=900,
@@ -25,7 +32,11 @@ model = dict(
         pad_to_max=False,
         use_sub_sentence_represent=True,
         special_tokens_list=['[CLS]', '[SEP]', '.', '?'],
+<<<<<<< HEAD
         add_pooling_layer=True,
+=======
+        add_pooling_layer=False,
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
     ),
     backbone=dict(
         type='SwinTransformer',
@@ -42,7 +53,13 @@ model = dict(
         patch_norm=True,
         out_indices=(1, 2, 3),
         with_cp=True,
+<<<<<<< HEAD
         convert_weights=False,
+=======
+        convert_weights=True,
+        frozen_stages=-1,
+        init_cfg=dict(type='Pretrained', checkpoint=pretrained),
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
     ),
     neck=dict(
         type='ChannelMapper',
@@ -87,9 +104,15 @@ model = dict(
     positional_encoding=dict(num_feats=128, normalize=True, offset=0.0, temperature=20),
     bbox_head=dict(
         type='GroundingDINOHead',
+<<<<<<< HEAD
         num_classes=80,
         sync_cls_avg_factor=True,
         contrastive_cfg=dict(max_text_len=256, log_scale=0.0, bias=False),
+=======
+        num_classes=256,
+        sync_cls_avg_factor=True,
+        contrastive_cfg=dict(max_text_len=256, log_scale='auto', bias=True),
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
         loss_cls=dict(
             type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=1.0
         ),  # 2.0 in DeformDETR
@@ -188,6 +211,10 @@ train_pipeline = [
             'flip_direction',
             'text',
             'custom_entities',
+<<<<<<< HEAD
+=======
+            'tokens_positive',
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
         ),
     ),
 ]
@@ -203,6 +230,7 @@ test_pipeline = [
 ]
 
 dataset_type = 'ODVGDataset'
+<<<<<<< HEAD
 data_root = '/home/PJLAB/huanghaian/dataset/coco200/'
 
 train_dataloader = dict(
@@ -222,6 +250,55 @@ train_dataloader = dict(
         return_classes=True,
         backend_args=None,
     ),
+=======
+# data_root = '/mnt/data/mmperc/zhaoxiangyu/data/objects365v1_processed/data/'
+data_root = '/mnt/workspace/zhaoxiangyu/data/grit_processed/'
+
+
+coco_od_dataset = dict(
+    type=dataset_type,
+    data_root=data_root,
+    ann_file='annotations/instances_train2017_od.json',
+    label_map_file='annotations/coco2017_label_map.json',
+    data_prefix=dict(img='train2017/'),
+    filter_cfg=dict(filter_empty_gt=False),
+    pipeline=train_pipeline,
+    return_classes=True,
+    backend_args=None,
+)
+
+o365v1_od_dataset = dict(
+    type=dataset_type,
+    data_root=data_root,
+    ann_file='o365v1_train_odvg.jsonl',
+    label_map_file='o365v1_label_map.json',
+    data_prefix=dict(img='train/'),
+    filter_cfg=dict(filter_empty_gt=False),
+    pipeline=train_pipeline,
+    return_classes=True,
+    backend_args=None,
+)
+
+grit_od_dataset = dict(
+    type=dataset_type,
+    data_root=data_root,
+    ann_file='/mnt/workspace/zhaoxiangyu/mmdetection/00000.jsonl',
+    data_prefix=dict(img='images/'),
+    filter_cfg=dict(filter_empty_gt=False),
+    pipeline=train_pipeline,
+    return_classes=True,
+    backend_args=None,
+)
+
+train_dataloader = dict(
+    _delete_=True,
+    batch_size=4,
+    num_workers=4,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=True),
+    batch_sampler=dict(type='AspectRatioBatchSampler'),
+    dataset=dict(type='ConcatDataset', datasets=[grit_od_dataset]),
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
 )
 
 val_dataloader = dict(dataset=dict(pipeline=test_pipeline, return_classes=True))
@@ -230,10 +307,21 @@ test_dataloader = val_dataloader
 optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
+<<<<<<< HEAD
     optimizer=dict(type='AdamW', lr=0.0001, weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
     paramwise_cfg=dict(
         custom_keys={'absolute_pos_embed': dict(decay_mult=0.0), 'backbone': dict(lr_mult=0.1)}
+=======
+    optimizer=dict(type='AdamW', lr=0.0004, weight_decay=0.0001),  # bs=16 0.0001
+    clip_grad=dict(max_norm=0.1, norm_type=2),
+    paramwise_cfg=dict(
+        custom_keys={
+            'absolute_pos_embed': dict(decay_mult=0.0),
+            'backbone': dict(lr_mult=0.1),
+            'language_model': dict(lr_mult=0.1),
+        }
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
     ),
 )
 
@@ -249,4 +337,8 @@ train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval
 # NOTE: `auto_scale_lr` is for automatically scaling LR,
 # USER SHOULD NOT CHANGE ITS VALUES.
 # base_batch_size = (16 GPUs) x (2 samples per GPU)
+<<<<<<< HEAD
 auto_scale_lr = dict(base_batch_size=32)
+=======
+auto_scale_lr = dict(base_batch_size=64)
+>>>>>>> 27db76dec0971cfbe4028cd4dfb50b05e55f9a93
