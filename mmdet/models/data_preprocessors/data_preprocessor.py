@@ -2,6 +2,8 @@
 import random
 from numbers import Number
 from typing import List, Optional, Sequence, Tuple, Union
+import math
+import copy
 
 import numpy as np
 import torch
@@ -10,7 +12,7 @@ import torch.nn.functional as F
 from mmengine.dist import barrier, broadcast, get_dist_info
 from mmengine.logging import MessageHub
 from mmengine.model import BaseDataPreprocessor, ImgDataPreprocessor
-from mmengine.structures import PixelData
+from mmengine.structures import PixelData, InstanceData
 from mmengine.utils import is_seq_of
 from torch import Tensor
 
@@ -74,20 +76,22 @@ class DetDataPreprocessor(ImgDataPreprocessor):
         batch_augments (list[dict], optional): Batch-level augmentations
     """
 
-    def __init__(self,
-                 mean: Sequence[Number] = None,
-                 std: Sequence[Number] = None,
-                 pad_size_divisor: int = 1,
-                 pad_value: Union[float, int] = 0,
-                 pad_mask: bool = False,
-                 mask_pad_value: int = 0,
-                 pad_seg: bool = False,
-                 seg_pad_value: int = 255,
-                 bgr_to_rgb: bool = False,
-                 rgb_to_bgr: bool = False,
-                 boxtype2tensor: bool = True,
-                 non_blocking: Optional[bool] = False,
-                 batch_augments: Optional[List[dict]] = None):
+    def __init__(
+        self,
+        mean: Sequence[Number] = None,
+        std: Sequence[Number] = None,
+        pad_size_divisor: int = 1,
+        pad_value: Union[float, int] = 0,
+        pad_mask: bool = False,
+        mask_pad_value: int = 0,
+        pad_seg: bool = False,
+        seg_pad_value: int = 255,
+        bgr_to_rgb: bool = False,
+        rgb_to_bgr: bool = False,
+        boxtype2tensor: bool = True,
+        non_blocking: Optional[bool] = False,
+        batch_augments: Optional[List[dict]] = None,
+    ):
         super().__init__(
             mean=mean,
             std=std,
@@ -95,10 +99,10 @@ class DetDataPreprocessor(ImgDataPreprocessor):
             pad_value=pad_value,
             bgr_to_rgb=bgr_to_rgb,
             rgb_to_bgr=rgb_to_bgr,
-            non_blocking=non_blocking)
+            non_blocking=non_blocking,
+        )
         if batch_augments is not None:
-            self.batch_augments = nn.ModuleList(
-                [MODELS.build(aug) for aug in batch_augments])
+            self.batch_augments = nn.ModuleList([MODELS.build(aug) for aug in batch_augments])
         else:
             self.batch_augments = None
         self.pad_mask = pad_mask
@@ -128,10 +132,7 @@ class DetDataPreprocessor(ImgDataPreprocessor):
             # then used for the transformer_head.
             batch_input_shape = tuple(inputs[0].size()[-2:])
             for data_sample, pad_shape in zip(data_samples, batch_pad_shape):
-                data_sample.set_metainfo({
-                    'batch_input_shape': batch_input_shape,
-                    'pad_shape': pad_shape
-                })
+                data_sample.set_metainfo({'batch_input_shape': batch_input_shape, 'pad_shape': pad_shape})
 
             if self.boxtype2tensor:
                 samplelist_boxtype2tensor(data_samples)
@@ -156,44 +157,37 @@ class DetDataPreprocessor(ImgDataPreprocessor):
         if is_seq_of(_batch_inputs, torch.Tensor):
             batch_pad_shape = []
             for ori_input in _batch_inputs:
-                pad_h = int(
-                    np.ceil(ori_input.shape[1] /
-                            self.pad_size_divisor)) * self.pad_size_divisor
-                pad_w = int(
-                    np.ceil(ori_input.shape[2] /
-                            self.pad_size_divisor)) * self.pad_size_divisor
+                pad_h = int(np.ceil(ori_input.shape[1] / self.pad_size_divisor)) * self.pad_size_divisor
+                pad_w = int(np.ceil(ori_input.shape[2] / self.pad_size_divisor)) * self.pad_size_divisor
                 batch_pad_shape.append((pad_h, pad_w))
         # Process data with `default_collate`.
         elif isinstance(_batch_inputs, torch.Tensor):
             assert _batch_inputs.dim() == 4, (
                 'The input of `ImgDataPreprocessor` should be a NCHW tensor '
                 'or a list of tensor, but got a tensor with shape: '
-                f'{_batch_inputs.shape}')
-            pad_h = int(
-                np.ceil(_batch_inputs.shape[2] /
-                        self.pad_size_divisor)) * self.pad_size_divisor
-            pad_w = int(
-                np.ceil(_batch_inputs.shape[3] /
-                        self.pad_size_divisor)) * self.pad_size_divisor
+                f'{_batch_inputs.shape}'
+            )
+            pad_h = int(np.ceil(_batch_inputs.shape[2] / self.pad_size_divisor)) * self.pad_size_divisor
+            pad_w = int(np.ceil(_batch_inputs.shape[3] / self.pad_size_divisor)) * self.pad_size_divisor
             batch_pad_shape = [(pad_h, pad_w)] * _batch_inputs.shape[0]
         else:
-            raise TypeError('Output of `cast_data` should be a dict '
-                            'or a tuple with inputs and data_samples, but got'
-                            f'{type(data)}: {data}')
+            raise TypeError(
+                'Output of `cast_data` should be a dict '
+                'or a tuple with inputs and data_samples, but got'
+                f'{type(data)}: {data}'
+            )
         return batch_pad_shape
 
-    def pad_gt_masks(self,
-                     batch_data_samples: Sequence[DetDataSample]) -> None:
+    def pad_gt_masks(self, batch_data_samples: Sequence[DetDataSample]) -> None:
         """Pad gt_masks to shape of batch_input_shape."""
         if 'masks' in batch_data_samples[0].gt_instances:
             for data_samples in batch_data_samples:
                 masks = data_samples.gt_instances.masks
                 data_samples.gt_instances.masks = masks.pad(
-                    data_samples.batch_input_shape,
-                    pad_val=self.mask_pad_value)
+                    data_samples.batch_input_shape, pad_val=self.mask_pad_value
+                )
 
-    def pad_gt_sem_seg(self,
-                       batch_data_samples: Sequence[DetDataSample]) -> None:
+    def pad_gt_sem_seg(self, batch_data_samples: Sequence[DetDataSample]) -> None:
         """Pad gt_sem_seg to shape of batch_input_shape."""
         if 'gt_sem_seg' in batch_data_samples[0]:
             for data_samples in batch_data_samples:
@@ -204,7 +198,8 @@ class DetDataPreprocessor(ImgDataPreprocessor):
                     gt_sem_seg,
                     pad=(0, max(pad_w - w, 0), 0, max(pad_h - h, 0)),
                     mode='constant',
-                    value=self.seg_pad_value)
+                    value=self.seg_pad_value,
+                )
                 data_samples.gt_sem_seg = PixelData(sem_seg=gt_sem_seg)
 
 
@@ -221,15 +216,16 @@ class BatchSyncRandomResize(nn.Module):
             Defaults to 32.
     """
 
-    def __init__(self,
-                 random_size_range: Tuple[int, int],
-                 interval: int = 10,
-                 size_divisor: int = 32) -> None:
+    def __init__(
+        self, random_size_range: Tuple[int, int], interval: int = 10, size_divisor: int = 32
+    ) -> None:
         super().__init__()
         self.rank, self.world_size = get_dist_info()
         self._input_size = None
-        self._random_size_range = (round(random_size_range[0] / size_divisor),
-                                   round(random_size_range[1] / size_divisor))
+        self._random_size_range = (
+            round(random_size_range[0] / size_divisor),
+            round(random_size_range[1] / size_divisor),
+        )
         self._interval = interval
         self._size_divisor = size_divisor
 
@@ -243,51 +239,38 @@ class BatchSyncRandomResize(nn.Module):
         scale_y = self._input_size[0] / h
         scale_x = self._input_size[1] / w
         if scale_x != 1 or scale_y != 1:
-            inputs = F.interpolate(
-                inputs,
-                size=self._input_size,
-                mode='bilinear',
-                align_corners=False)
+            inputs = F.interpolate(inputs, size=self._input_size, mode='bilinear', align_corners=False)
             for data_sample in data_samples:
-                img_shape = (int(data_sample.img_shape[0] * scale_y),
-                             int(data_sample.img_shape[1] * scale_x))
-                pad_shape = (int(data_sample.pad_shape[0] * scale_y),
-                             int(data_sample.pad_shape[1] * scale_x))
-                data_sample.set_metainfo({
-                    'img_shape': img_shape,
-                    'pad_shape': pad_shape,
-                    'batch_input_shape': self._input_size
-                })
-                data_sample.gt_instances.bboxes[
-                    ...,
-                    0::2] = data_sample.gt_instances.bboxes[...,
-                                                            0::2] * scale_x
-                data_sample.gt_instances.bboxes[
-                    ...,
-                    1::2] = data_sample.gt_instances.bboxes[...,
-                                                            1::2] * scale_y
+                img_shape = (int(data_sample.img_shape[0] * scale_y), int(data_sample.img_shape[1] * scale_x))
+                pad_shape = (int(data_sample.pad_shape[0] * scale_y), int(data_sample.pad_shape[1] * scale_x))
+                data_sample.set_metainfo(
+                    {'img_shape': img_shape, 'pad_shape': pad_shape, 'batch_input_shape': self._input_size}
+                )
+                data_sample.gt_instances.bboxes[..., 0::2] = (
+                    data_sample.gt_instances.bboxes[..., 0::2] * scale_x
+                )
+                data_sample.gt_instances.bboxes[..., 1::2] = (
+                    data_sample.gt_instances.bboxes[..., 1::2] * scale_y
+                )
                 if 'ignored_instances' in data_sample:
-                    data_sample.ignored_instances.bboxes[
-                        ..., 0::2] = data_sample.ignored_instances.bboxes[
-                            ..., 0::2] * scale_x
-                    data_sample.ignored_instances.bboxes[
-                        ..., 1::2] = data_sample.ignored_instances.bboxes[
-                            ..., 1::2] * scale_y
+                    data_sample.ignored_instances.bboxes[..., 0::2] = (
+                        data_sample.ignored_instances.bboxes[..., 0::2] * scale_x
+                    )
+                    data_sample.ignored_instances.bboxes[..., 1::2] = (
+                        data_sample.ignored_instances.bboxes[..., 1::2] * scale_y
+                    )
         message_hub = MessageHub.get_current_instance()
         if (message_hub.get_info('iter') + 1) % self._interval == 0:
-            self._input_size = self._get_random_size(
-                aspect_ratio=float(w / h), device=inputs.device)
+            self._input_size = self._get_random_size(aspect_ratio=float(w / h), device=inputs.device)
         return inputs, data_samples
 
-    def _get_random_size(self, aspect_ratio: float,
-                         device: torch.device) -> Tuple[int, int]:
+    def _get_random_size(self, aspect_ratio: float, device: torch.device) -> Tuple[int, int]:
         """Randomly generate a shape in ``_random_size_range`` and broadcast to
         all ranks."""
         tensor = torch.LongTensor(2).to(device)
         if self.rank == 0:
             size = random.randint(*self._random_size_range)
-            size = (self._size_divisor * size,
-                    self._size_divisor * int(aspect_ratio * size))
+            size = (self._size_divisor * size, self._size_divisor * int(aspect_ratio * size))
             tensor[0] = size[0]
             tensor[1] = size[1]
         barrier()
@@ -314,13 +297,15 @@ class BatchFixedSizePad(nn.Module):
             segmentation maps. Defaults to 255.
     """
 
-    def __init__(self,
-                 size: Tuple[int, int],
-                 img_pad_value: int = 0,
-                 pad_mask: bool = False,
-                 mask_pad_value: int = 0,
-                 pad_seg: bool = False,
-                 seg_pad_value: int = 255) -> None:
+    def __init__(
+        self,
+        size: Tuple[int, int],
+        img_pad_value: int = 0,
+        pad_mask: bool = False,
+        mask_pad_value: int = 0,
+        pad_seg: bool = False,
+        seg_pad_value: int = 255,
+    ) -> None:
         super().__init__()
         self.size = size
         self.pad_mask = pad_mask
@@ -330,9 +315,7 @@ class BatchFixedSizePad(nn.Module):
         self.seg_pad_value = seg_pad_value
 
     def forward(
-        self,
-        inputs: Tensor,
-        data_samples: Optional[List[dict]] = None
+        self, inputs: Tensor, data_samples: Optional[List[dict]] = None
     ) -> Tuple[Tensor, Optional[List[dict]]]:
         """Pad image, instance masks, segmantic segmentation maps."""
         src_h, src_w = inputs.shape[-2:]
@@ -345,21 +328,18 @@ class BatchFixedSizePad(nn.Module):
             inputs,
             pad=(0, max(0, dst_w - src_w), 0, max(0, dst_h - src_h)),
             mode='constant',
-            value=self.img_pad_value)
+            value=self.img_pad_value,
+        )
 
         if data_samples is not None:
             # update batch_input_shape
             for data_sample in data_samples:
-                data_sample.set_metainfo({
-                    'batch_input_shape': (dst_h, dst_w),
-                    'pad_shape': (dst_h, dst_w)
-                })
+                data_sample.set_metainfo({'batch_input_shape': (dst_h, dst_w), 'pad_shape': (dst_h, dst_w)})
 
             if self.pad_mask:
                 for data_sample in data_samples:
                     masks = data_sample.gt_instances.masks
-                    data_sample.gt_instances.masks = masks.pad(
-                        (dst_h, dst_w), pad_val=self.mask_pad_value)
+                    data_sample.gt_instances.masks = masks.pad((dst_h, dst_w), pad_val=self.mask_pad_value)
 
             if self.pad_seg:
                 for data_sample in data_samples:
@@ -369,7 +349,8 @@ class BatchFixedSizePad(nn.Module):
                         gt_sem_seg,
                         pad=(0, max(0, dst_w - w), 0, max(0, dst_h - h)),
                         mode='constant',
-                        value=self.seg_pad_value)
+                        value=self.seg_pad_value,
+                    )
                     data_sample.gt_sem_seg = PixelData(sem_seg=gt_sem_seg)
 
         return inputs, data_samples
@@ -496,8 +477,7 @@ class MultiBranchDataPreprocessor(BaseDataPreprocessor):
         # Filter out branches with a value of None
         for key in data.keys():
             for branch in data[key].keys():
-                data[key][branch] = list(
-                    filter(lambda x: x is not None, data[key][branch]))
+                data[key][branch] = list(filter(lambda x: x is not None, data[key][branch]))
 
         # Group data by branch
         multi_branch_data = {}
@@ -523,8 +503,7 @@ class MultiBranchDataPreprocessor(BaseDataPreprocessor):
                 elif format_data[key].get(branch, None) is None:
                     format_data[key][branch] = multi_branch_data[branch][key]
                 else:
-                    format_data[key][branch].append(
-                        multi_branch_data[branch][key])
+                    format_data[key][branch].append(multi_branch_data[branch][key])
 
         return format_data
 
@@ -532,8 +511,7 @@ class MultiBranchDataPreprocessor(BaseDataPreprocessor):
     def device(self):
         return self.data_preprocessor.device
 
-    def to(self, device: Optional[Union[int, torch.device]], *args,
-           **kwargs) -> nn.Module:
+    def to(self, device: Optional[Union[int, torch.device]], *args, **kwargs) -> nn.Module:
         """Overrides this method to set the :attr:`device`
 
         Args:
@@ -602,45 +580,40 @@ class BatchResize(nn.Module):
         """resize a batch of images and bboxes."""
 
         batch_height, batch_width = inputs.shape[-2:]
-        target_height, target_width, scale = self.get_target_size(
-            batch_height, batch_width)
+        target_height, target_width, scale = self.get_target_size(batch_height, batch_width)
 
         inputs = F.interpolate(
-            inputs,
-            size=(target_height, target_width),
-            mode='bilinear',
-            align_corners=False)
+            inputs, size=(target_height, target_width), mode='bilinear', align_corners=False
+        )
 
         inputs = self.get_padded_tensor(inputs, self.pad_value)
 
         if data_samples is not None:
             batch_input_shape = tuple(inputs.size()[-2:])
             for data_sample in data_samples:
-                img_shape = [
-                    int(scale * _) for _ in list(data_sample.img_shape)
-                ]
-                data_sample.set_metainfo({
-                    'img_shape': tuple(img_shape),
-                    'batch_input_shape': batch_input_shape,
-                    'pad_shape': batch_input_shape,
-                    'scale_factor': (scale, scale)
-                })
+                img_shape = [int(scale * _) for _ in list(data_sample.img_shape)]
+                data_sample.set_metainfo(
+                    {
+                        'img_shape': tuple(img_shape),
+                        'batch_input_shape': batch_input_shape,
+                        'pad_shape': batch_input_shape,
+                        'scale_factor': (scale, scale),
+                    }
+                )
 
                 data_sample.gt_instances.bboxes *= scale
                 data_sample.ignored_instances.bboxes *= scale
 
         return inputs, data_samples
 
-    def get_target_size(self, height: int,
-                        width: int) -> Tuple[int, int, float]:
+    def get_target_size(self, height: int, width: int) -> Tuple[int, int, float]:
         """Get the target size of a batch of images based on data and scale."""
         im_size_min = np.min([height, width])
         im_size_max = np.max([height, width])
         scale = self.min_size / im_size_min
         if scale * im_size_max > self.max_size:
             scale = self.max_size / im_size_max
-        target_height, target_width = int(round(height * scale)), int(
-            round(width * scale))
+        target_height, target_width = int(round(height * scale)), int(round(width * scale))
         return target_height, target_width, scale
 
     def get_padded_tensor(self, tensor: Tensor, pad_value: int) -> Tensor:
@@ -650,9 +623,9 @@ class BatchResize(nn.Module):
         divisor = self.pad_size_divisor
         padded_height = (target_height + divisor - 1) // divisor * divisor
         padded_width = (target_width + divisor - 1) // divisor * divisor
-        padded_tensor = torch.ones([
-            tensor.shape[0], tensor.shape[1], padded_height, padded_width
-        ]) * pad_value
+        padded_tensor = (
+            torch.ones([tensor.shape[0], tensor.shape[1], padded_height, padded_width]) * pad_value
+        )
         padded_tensor = padded_tensor.type_as(tensor)
         padded_tensor[:, :, :target_height, :target_width] = tensor
         return padded_tensor
@@ -680,14 +653,16 @@ class BoxInstDataPreprocessor(DetDataPreprocessor):
             Defaults to 10.
     """
 
-    def __init__(self,
-                 *arg,
-                 mask_stride: int = 4,
-                 pairwise_size: int = 3,
-                 pairwise_dilation: int = 2,
-                 pairwise_color_thresh: float = 0.3,
-                 bottom_pixels_removed: int = 10,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        *arg,
+        mask_stride: int = 4,
+        pairwise_size: int = 3,
+        pairwise_dilation: int = 2,
+        pairwise_color_thresh: float = 0.3,
+        bottom_pixels_removed: int = 10,
+        **kwargs,
+    ) -> None:
         super().__init__(*arg, **kwargs)
         self.mask_stride = mask_stride
         self.pairwise_size = pairwise_size
@@ -696,26 +671,25 @@ class BoxInstDataPreprocessor(DetDataPreprocessor):
         self.bottom_pixels_removed = bottom_pixels_removed
 
         if skimage is None:
-            raise RuntimeError('skimage is not installed,\
-                 please install it by: pip install scikit-image')
+            raise RuntimeError(
+                'skimage is not installed,\
+                 please install it by: pip install scikit-image'
+            )
 
-    def get_images_color_similarity(self, inputs: Tensor,
-                                    image_masks: Tensor) -> Tensor:
+    def get_images_color_similarity(self, inputs: Tensor, image_masks: Tensor) -> Tensor:
         """Compute the image color similarity in LAB color space."""
         assert inputs.dim() == 4
         assert inputs.size(0) == 1
 
         unfolded_images = unfold_wo_center(
-            inputs,
-            kernel_size=self.pairwise_size,
-            dilation=self.pairwise_dilation)
+            inputs, kernel_size=self.pairwise_size, dilation=self.pairwise_dilation
+        )
         diff = inputs[:, :, None] - unfolded_images
         similarity = torch.exp(-torch.norm(diff, dim=1) * 0.5)
 
         unfolded_weights = unfold_wo_center(
-            image_masks[None, None],
-            kernel_size=self.pairwise_size,
-            dilation=self.pairwise_dilation)
+            image_masks[None, None], kernel_size=self.pairwise_size, dilation=self.pairwise_dilation
+        )
         unfolded_weights = torch.max(unfolded_weights, dim=1)[0]
 
         return similarity * unfolded_weights
@@ -732,62 +706,218 @@ class BoxInstDataPreprocessor(DetDataPreprocessor):
             for i in range(inputs.shape[0]):
                 img_h, img_w = data_samples[i].img_shape
                 img_mask = inputs.new_ones((img_h, img_w))
-                pixels_removed = int(self.bottom_pixels_removed *
-                                     float(img_h) / float(b_img_h))
+                pixels_removed = int(self.bottom_pixels_removed * float(img_h) / float(b_img_h))
                 if pixels_removed > 0:
                     img_mask[-pixels_removed:, :] = 0
                 pad_w = b_img_w - img_w
                 pad_h = b_img_h - img_h
-                img_mask = F.pad(img_mask, (0, pad_w, 0, pad_h), 'constant',
-                                 0.)
+                img_mask = F.pad(img_mask, (0, pad_w, 0, pad_h), 'constant', 0.0)
                 img_masks.append(img_mask)
             img_masks = torch.stack(img_masks, dim=0)
             start = int(self.mask_stride // 2)
-            img_masks = img_masks[:, start::self.mask_stride,
-                                  start::self.mask_stride]
+            img_masks = img_masks[:, start :: self.mask_stride, start :: self.mask_stride]
 
             # Get origin rgb image for color similarity
             ori_imgs = inputs * self.std + self.mean
             downsampled_imgs = F.avg_pool2d(
-                ori_imgs.float(),
-                kernel_size=self.mask_stride,
-                stride=self.mask_stride,
-                padding=0)
+                ori_imgs.float(), kernel_size=self.mask_stride, stride=self.mask_stride, padding=0
+            )
 
             # Compute color similarity for pseudo mask generation
             for im_i, data_sample in enumerate(data_samples):
                 # TODO: Support rgb2lab in mmengine?
                 images_lab = skimage.color.rgb2lab(
-                    downsampled_imgs[im_i].byte().permute(1, 2,
-                                                          0).cpu().numpy())
-                images_lab = torch.as_tensor(
-                    images_lab, device=ori_imgs.device, dtype=torch.float32)
+                    downsampled_imgs[im_i].byte().permute(1, 2, 0).cpu().numpy()
+                )
+                images_lab = torch.as_tensor(images_lab, device=ori_imgs.device, dtype=torch.float32)
                 images_lab = images_lab.permute(2, 0, 1)[None]
-                images_color_similarity = self.get_images_color_similarity(
-                    images_lab, img_masks[im_i])
-                pairwise_mask = (images_color_similarity >=
-                                 self.pairwise_color_thresh).float()
+                images_color_similarity = self.get_images_color_similarity(images_lab, img_masks[im_i])
+                pairwise_mask = (images_color_similarity >= self.pairwise_color_thresh).float()
 
                 per_im_bboxes = data_sample.gt_instances.bboxes
                 if per_im_bboxes.shape[0] > 0:
                     per_im_masks = []
                     for per_box in per_im_bboxes:
-                        mask_full = torch.zeros((b_img_h, b_img_w),
-                                                device=self.device).float()
-                        mask_full[int(per_box[1]):int(per_box[3] + 1),
-                                  int(per_box[0]):int(per_box[2] + 1)] = 1.0
+                        mask_full = torch.zeros((b_img_h, b_img_w), device=self.device).float()
+                        mask_full[
+                            int(per_box[1]) : int(per_box[3] + 1), int(per_box[0]) : int(per_box[2] + 1)
+                        ] = 1.0
                         per_im_masks.append(mask_full)
                     per_im_masks = torch.stack(per_im_masks, dim=0)
-                    pairwise_masks = torch.cat(
-                        [pairwise_mask for _ in range(per_im_bboxes.shape[0])],
-                        dim=0)
+                    pairwise_masks = torch.cat([pairwise_mask for _ in range(per_im_bboxes.shape[0])], dim=0)
                 else:
                     per_im_masks = torch.zeros((0, b_img_h, b_img_w))
-                    pairwise_masks = torch.zeros(
-                        (0, self.pairwise_size**2 - 1, b_img_h, b_img_w))
+                    pairwise_masks = torch.zeros((0, self.pairwise_size**2 - 1, b_img_h, b_img_w))
 
                 # TODO: Support BitmapMasks with tensor?
-                data_sample.gt_instances.masks = BitmapMasks(
-                    per_im_masks.cpu().numpy(), b_img_h, b_img_w)
+                data_sample.gt_instances.masks = BitmapMasks(per_im_masks.cpu().numpy(), b_img_h, b_img_w)
                 data_sample.gt_instances.pairwise_masks = pairwise_masks
         return {'inputs': inputs, 'data_samples': data_samples}
+
+
+@MODELS.register_module()
+class VideoDataPreprocessor(ImgDataPreprocessor):
+    def __init__(
+        self,
+        do_round=False,
+        div_vid=0,
+        mean: Sequence[Number] = None,
+        std: Sequence[Number] = None,
+        pad_size_divisor: int = 1,
+        pad_value: Union[float, int] = 0,
+        pad_mask: bool = False,
+        mask_pad_value: int = 0,
+        pad_seg: bool = False,
+        seg_pad_value: int = 255,
+        bgr_to_rgb: bool = False,
+        rgb_to_bgr: bool = False,
+        boxtype2tensor: bool = True,
+        non_blocking: Optional[bool] = False,
+        batch_augments: Optional[List[dict]] = None,
+    ):
+        super().__init__(
+            mean=mean,
+            std=std,
+            pad_size_divisor=pad_size_divisor,
+            pad_value=pad_value,
+            bgr_to_rgb=bgr_to_rgb,
+            rgb_to_bgr=rgb_to_bgr,
+            non_blocking=non_blocking,
+        )
+        self.do_round = do_round
+        self.div_vid = div_vid
+        if batch_augments is not None:
+            self.batch_augments = nn.ModuleList([MODELS.build(aug) for aug in batch_augments])
+        else:
+            self.batch_augments = None
+
+    def forward(self, data: dict, training: bool = False) -> dict:
+        # div_vid: if set >0, each video is divided into clips of div_vid (number of frames that the model takes as input) consecutive frames
+        # batch = list(zip(*data['inputs']))  # stride_images, targets, tmp targets, images
+
+        data['inputs'] = NestedTensor.from_tensor_list(
+            data['inputs'], self.do_round
+        )  # padded on the longest height and width;图片和视频分别处理，视频将batch维度替换为b*t;[b*t,c,h,w]
+        if 'inputs_fast' in data:  # stride > 0
+            data['inputs_fast'] = NestedTensor.from_tensor_list(
+                data['inputs_fast'], self.do_round
+            )  # padded on the longest height and width，未被stride抽样的图片序列
+        samples = []
+        durations = [len(x.frames_id) for x in data['data_samples']]  # used to temporally unpad samples later
+        box_frame = 0
+        # transform data_samples from list to batch, where dim(batchsize) = t * original batchsize
+        for i, data_sample in enumerate(data['data_samples']):
+            assert durations[i] == len(data_sample.gt_instances.bboxes)
+            for j in range(durations[i]):
+                split_data_sample = copy.deepcopy(data_sample)
+                meta_info = data_sample.metainfo
+                meta_info['img_in_vid_ids'] = data_sample.img_in_vid_ids[j]
+                # if data_sample.img_in_vid_ids[j] in ['3_1715', '2_1715']:
+                #     print('fuck')
+                split_data_sample.set_metainfo(meta_info)
+                instance_data = InstanceData()
+                instance_data.bboxes = data_sample.gt_instances.bboxes[j]
+                if data_sample.gt_instances.bboxes[j].size(0) == 0:  # no box in this frame
+                    instance_data.labels = torch.empty(0, 1)
+                else:
+                    instance_data.labels = data_sample.gt_instances.labels[j].unsqueeze(0)
+                    box_frame = box_frame + 1
+
+                split_data_sample.gt_instances = instance_data
+                split_data_sample.durations = durations
+                samples.append(split_data_sample)
+
+        data['data_samples'] = samples
+
+        data = super().forward(data=data, training=training)  # change data device
+
+        inputs, data_samples = data['inputs'], data['data_samples']
+        batch_pad_shape = data_samples[0].metainfo['img_shape']
+        if data_samples is not None:
+            # NOTE the batched image size information may be useful, e.g.
+            # in DETR, this is needed for the construction of masks, which is
+            # then used for the transformer_head.
+            batch_input_shape = tuple(inputs[0].size()[-2:])
+            for data_sample, pad_shape in zip(data_samples, batch_pad_shape):
+                data_sample.set_metainfo({'batch_input_shape': batch_input_shape, 'pad_shape': pad_shape})
+
+        if training and self.batch_augments is not None:
+            for batch_aug in self.batch_augments:
+                inputs, data_samples = batch_aug(inputs, data_samples)
+
+        return {'inputs': inputs, 'data_samples': data_samples}
+
+
+class NestedTensor(object):
+    def __init__(self, tensors, mask):
+        self.tensors = tensors
+        self.mask = mask
+
+    def to(self, *args, **kwargs):
+        cast_tensor = self.tensors.to(*args, **kwargs)
+        cast_mask = self.mask.to(*args, **kwargs) if self.mask is not None else None
+        return type(self)(cast_tensor, cast_mask)
+
+    def decompose(self):
+        return self.tensors, self.mask
+
+    @classmethod
+    def from_tensor_list(cls, tensor_list, do_round=False):
+        # TODO make this more general
+        if tensor_list[0].ndim == 3:  # images
+            # TODO make it support different-sized images
+            max_size = tuple(max(s) for s in zip(*[img.shape for img in tensor_list]))
+            # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
+            batch_shape = (len(tensor_list),) + max_size
+            b, c, h, w = batch_shape
+            if do_round:
+                # Round to an even size to avoid rounding issues in fpn
+                p = 128
+                h = h if h % p == 0 else (h // p + 1) * p
+                w = w if w % p == 0 else (w // p + 1) * p
+                batch_shape = b, c, h, w
+
+            dtype = tensor_list[0].dtype
+            device = tensor_list[0].device
+            tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
+            mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
+            for img, pad_img, m in zip(tensor_list, tensor, mask):
+                pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+                m[: img.shape[1], : img.shape[2]] = False
+        elif tensor_list[0].ndim == 4:  # videos
+            max_size = tuple(max(s) for s in zip(*[clip.shape for clip in tensor_list]))
+            batch_shape = (len(tensor_list),) + max_size
+            b, c, t, h, w = batch_shape
+            if do_round:
+                # Round to an even size to avoid rounding issues in fpn
+                p = 128
+                h = h if h % p == 0 else (h // p + 1) * p
+                w = w if w % p == 0 else (w // p + 1) * p
+                batch_shape = b, c, t, h, w
+
+            dtype = tensor_list[0].dtype
+            device = tensor_list[0].device
+
+            nb_images = sum(clip.shape[1] for clip in tensor_list)  # total number of frames in the batch
+            tensor = torch.zeros((nb_images, c, h, w), dtype=dtype, device=device)
+            mask = torch.ones((nb_images, h, w), dtype=torch.bool, device=device)
+            cur_dur = 0
+            for i_clip, clip in enumerate(tensor_list):
+                tensor[
+                    cur_dur : cur_dur + clip.shape[1],
+                    : clip.shape[0],
+                    : clip.shape[2],
+                    : clip.shape[3],
+                ].copy_(clip.transpose(0, 1))
+                mask[cur_dur : cur_dur + clip.shape[1], : clip.shape[2], : clip.shape[3]] = False
+                cur_dur += clip.shape[1]
+            if do_round:
+                return tensor, mask
+            else:
+                return tensor
+        else:
+            raise ValueError("not supported")
+        return cls(tensor, mask)
+
+    def __repr__(self):
+        return repr(self.tensors)

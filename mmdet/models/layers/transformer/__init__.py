@@ -15,6 +15,7 @@ from .dino_layers import CdnQueryGenerator, DinoTransformerDecoder
 from .grounding_dino_layers import (GroundingDinoTransformerDecoder,
                                     GroundingDinoTransformerDecoderLayer,
                                     GroundingDinoTransformerEncoder)
+from .video_grounding_dino_layers import VideoGroundingDinoTransformerDecoder, VideoGroundingDinoTransformerDecoderLayer
 from .mask2former_layers import (Mask2FormerTransformerDecoder,
                                  Mask2FormerTransformerDecoderLayer,
                                  Mask2FormerTransformerEncoder)
