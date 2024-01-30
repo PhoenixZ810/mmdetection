@@ -13,11 +13,11 @@ from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList, SampleList
 from mmdet.utils import ConfigType
 from ..layers import SinePositionalEncoding
-from ..layers.transformer.grounding_dino_layers import (
-    GroundingDinoTransformerDecoder,
-    GroundingDinoTransformerEncoder,
+from ..layers.transformer.video_grounding_dino_layers import (
+    VideoGroundingDinoTransformerEncoder,
+    VideoGroundingDinoTransformerDecoder,
 )
-from ..layers.transformer.video_grounding_dino_layers import VideoGroundingDinoTransformerDecoder
+
 from .dino import DINO
 from .glip import create_positive_map, create_positive_map_label_to_token, run_ner
 from .grounding_dino import GroundingDINO
@@ -32,6 +32,7 @@ class VideoGroundingDINO(GroundingDINO):
         max_time_pos_frames=200,
         freeze_backbone=False,
         freeze_language_model=False,
+        freeze_encoder = False,
         *args,
         **kwargs,
     ) -> None:
@@ -44,10 +45,13 @@ class VideoGroundingDINO(GroundingDINO):
         self.max_frames = max_time_pos_frames
         self.freeze_backbone = freeze_backbone
         self.freeze_language_model = freeze_language_model
+        self.freeze_encoder = freeze_encoder
         if self.freeze_backbone:
             self.backbone.requires_grad_(False)
         if self.freeze_language_model:
             self.language_model.requires_grad_(False)
+        if self.freeze_encoder:
+            self.encoder.requires_grad_(False)
         if self.use_time_embed:
             self.time_embed = TimeEmbeddingSine(max_len=self.max_frames, d_model=self.embed_dims)
         print(self)
@@ -55,7 +59,7 @@ class VideoGroundingDINO(GroundingDINO):
     def _init_layers(self) -> None:
         """Initialize layers except for backbone, neck and bbox_head."""
         self.positional_encoding = SinePositionalEncoding(**self.positional_encoding)
-        self.encoder = GroundingDinoTransformerEncoder(**self.encoder)
+        self.encoder = VideoGroundingDinoTransformerEncoder(**self.encoder)
         self.decoder = VideoGroundingDinoTransformerDecoder(**self.decoder)
         self.embed_dims = self.encoder.embed_dims
         self.query_embedding = nn.Embedding(self.num_queries, self.embed_dims)
@@ -85,9 +89,10 @@ class VideoGroundingDINO(GroundingDINO):
         text_dict: Dict,
     ) -> Dict:
         text_token_mask = text_dict['text_token_mask']
+
         if self.use_time_embed:
             time_embed = self.time_embed(feat_pos.shape[0]).to(feat_pos.device)
-            feat_pos += time_embed
+
         memory, memory_text = self.encoder(
             query=feat,
             query_pos=feat_pos,
@@ -100,6 +105,7 @@ class VideoGroundingDINO(GroundingDINO):
             text_attention_mask=~text_token_mask,
             position_ids=text_dict['position_ids'],
             text_self_attention_masks=text_dict['masks'],
+            time_embed=time_embed,
         )
         encoder_outputs_dict = dict(
             memory=memory,
@@ -252,39 +258,27 @@ class VideoGroundingDINO(GroundingDINO):
                 `self.decoder`, has shape (num_queries_total,
                 num_queries_total).
                 It is `None` when `self.training` is `False`.
+            time_embed (Tensor, optional): The temporal encoding of the batch. Default: None, has shape[t,1, embed_dims]
 
         Returns:
             dict: The dictionary of decoder outputs, which includes the
             `hidden_states` of the decoder output and `references` including
             the initial and intermediate reference_points.
         """
-        if time_embed is not None:
-            inter_states, references = self.decoder(
-                query=query,
-                value=memory,
-                key_padding_mask=memory_mask,
-                self_attn_mask=dn_mask,
-                reference_points=reference_points,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                valid_ratios=valid_ratios,
-                reg_branches=self.bbox_head.reg_branches,
-                time_embed=time_embed,
-                **kwargs,
-            )
-        else:
-            inter_states, references = self.decoder(
-                query=query,
-                value=memory,
-                key_padding_mask=memory_mask,
-                self_attn_mask=dn_mask,
-                reference_points=reference_points,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                valid_ratios=valid_ratios,
-                reg_branches=self.bbox_head.reg_branches,
-                **kwargs,
-            )
+
+        inter_states, references = self.decoder(
+            query=query,
+            value=memory,
+            key_padding_mask=memory_mask,
+            self_attn_mask=dn_mask,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+            valid_ratios=valid_ratios,
+            reg_branches=self.bbox_head.reg_branches,
+            time_embed=time_embed,
+            **kwargs,
+        )
 
         # if len(query) == self.num_queries:
         #     # NOTE: This is to make sure label_embeding can be involved to
@@ -295,8 +289,6 @@ class VideoGroundingDINO(GroundingDINO):
 
         decoder_outputs_dict = dict(hidden_states=inter_states, references=list(references))
         return decoder_outputs_dict
-
-    '''time only'''
 
     def get_positive_map(self, tokenized, tokens_positive):
         positive_map = create_positive_map(

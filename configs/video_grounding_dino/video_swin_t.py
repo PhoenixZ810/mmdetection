@@ -18,6 +18,7 @@ model = dict(
     max_time_pos_frames=200,
     freeze_backbone=True,
     freeze_language_model=True,
+    freeze_encoder=True,
     data_preprocessor=dict(
         type='VideoDataPreprocessor',
         do_round=False,
@@ -67,6 +68,11 @@ model = dict(
     encoder=dict(
         num_layers=6,
         num_cp=6,
+        # # visual temporal self-attention config
+        # time_attn_layer_cfg=dict(
+        #     self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
+        #     ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
+        # ),
         # visual layer config, MultiScaleDeformableAttention
         layer_cfg=dict(
             self_attn_cfg=dict(embed_dims=256, num_levels=4, dropout=0.0, im2col_step=1),
@@ -84,6 +90,8 @@ model = dict(
         num_layers=6,
         return_intermediate=True,
         layer_cfg=dict(
+            # query temporal self-attention layer
+            time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
             # query self attention layer
             self_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
             # cross attention layer query to text
@@ -104,8 +112,10 @@ model = dict(
             type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=1.0
         ),  # 2.0 in DeformDETR
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
-        sted_loss_weight=10.0,
         use_sted=True,
+        sted_loss_weight=10.0,
+        time_only=False,
+        exclude_cls=False,
     ),
     use_dn=False,
     dn_cfg=dict(  # TODO: Move to model.train_cfg ?
@@ -144,25 +154,27 @@ video_train_pipeline = [
         spatial_transform=dict(
             type='Compose',
             transforms=[
-                dict(
-                    type='RandomChoice',
-                    transforms=[
-                        dict(type='VideoRandomResize', sizes=scales, max_size=max_size),
-                        dict(
-                            type='Compose',
-                            transforms=[
-                                dict(type='VideoRandomResize', sizes=resizes, max_size=max_size),
-                                dict(
-                                    type='VideoRandomSizeCrop',
-                                    min_size=crop,
-                                    max_size=max_size,
-                                    respect_boxes=cautious,
-                                ),
-                                dict(type='VideoRandomResize', sizes=scales, max_size=max_size),
-                            ],
-                        ),
-                    ],
-                ),
+                dict(type='VideoRandomHorizontalFlip'),
+                dict(type='VideoRandomResize', sizes=scales, max_size=max_size),
+                # dict(
+                #     type='RandomChoice',
+                #     transforms=[
+                #         dict(type='VideoRandomResize', sizes=scales, max_size=max_size),
+                #         dict(
+                #             type='Compose',
+                #             transforms=[
+                #                 dict(type='VideoRandomResize', sizes=resizes, max_size=max_size),
+                #                 dict(
+                #                     type='VideoRandomSizeCrop',
+                #                     min_size=crop,
+                #                     max_size=max_size,
+                #                     respect_boxes=cautious,
+                #                 ),
+                #                 dict(type='VideoRandomResize', sizes=scales, max_size=max_size),
+                #             ],
+                #         ),
+                #     ],
+                # ),
                 dict(type='VideoToTensor'),
                 # dict(type='VideoBoxNormalize'), # ordinate normalization, xyxy
             ],
@@ -339,8 +351,8 @@ data_root = 'data/'
 vidstg_video_dataset = dict(
     type='VideoModulatedSTGrounding',
     data_root=data_root,
-    ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
-    # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/train_filter.json',
+    # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/train_filter.json',
     data_prefix=dict(img='VidSTG/video/'),
     filter_cfg=dict(filter_empty_gt=False),
     pipeline=video_train_pipeline,
@@ -395,7 +407,7 @@ test_evaluator = val_evaluator
 optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
-    optimizer=dict(type='AdamW', lr=0.00004, weight_decay=0.0001),  # bs=16 0.0001
+    optimizer=dict(type='AdamW', lr=0.00002, weight_decay=0.0001),  # bs=16 0.0001
     clip_grad=dict(max_norm=0.1, norm_type=2),
     paramwise_cfg=dict(
         custom_keys={

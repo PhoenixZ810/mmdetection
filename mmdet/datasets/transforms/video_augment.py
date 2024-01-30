@@ -71,10 +71,13 @@ class VideoRandomHorizontalFlip(object):
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, video, targets):
+    def __call__(self, data):
+        video = data[0]
+        targets = None if len(data) == 1 else data[1]
         if random.random() < self.p:
-            return hflip(video, targets)
-        return video, targets
+            flipped_clip, targets = hflip(video, targets)
+            return [flipped_clip, targets]
+        return [video, targets]
 
 
 def hflip(clip, targets):
@@ -85,7 +88,7 @@ def hflip(clip, targets):
             img.transpose(PIL.Image.FLIP_LEFT_RIGHT) for img in clip
         ]  # apply for every image of the clip
 
-    w, h = clip[0].size
+    w = clip[0].shape[1]
 
     targets = targets.copy()
     if "boxes" in targets[0]:  # apply for every image of the clip
@@ -105,6 +108,8 @@ def hflip(clip, targets):
             targets[0]["caption"].replace("left", "[TMP]").replace("right", "left").replace("[TMP]", "right")
         )
         targets[0]["caption"] = caption
+    for target in targets:
+        target["horizenf"] = True
 
     return flipped_clip, targets
 
@@ -179,12 +184,12 @@ def resize(clip, targets, size, max_size=None):
     ratios = tuple(float(s_mod) / float(s_orig) for s_mod, s_orig in zip(s2, s))
     ratio_width, ratio_height = ratios
 
-    # targets = targets.copy()
-    # if "boxes" in targets[0]:
-    #     for i_tgt in range(len(targets)):  # apply for every image of the clip
-    #         boxes = targets[i_tgt]["boxes"]
-    #         scaled_boxes = boxes * torch.as_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
-    #         targets[i_tgt]["boxes"] = scaled_boxes
+    targets = targets.copy()
+    if "boxes" in targets[0]:
+        for i_tgt in range(len(targets)):  # apply for every image of the clip
+            boxes = targets[i_tgt]["boxes"]
+            scaled_boxes = boxes * torch.as_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
+            targets[i_tgt]["boxes"] = scaled_boxes
 
     if "area" in targets[0]:  # TODO: not sure if it is needed to do for all images from the clip
         for i_tgt in range(len(targets)):  # apply for every image of the clip

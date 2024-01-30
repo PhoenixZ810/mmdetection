@@ -25,11 +25,12 @@ from .deformable_detr_head import DeformableDETRHead
 
 @MODELS.register_module()
 class VideoGroundingHead(GroundingDINOHead):
-    def __init__(self, use_sted=False, sigma=1, sted_loss_weight=5.0, time_only=False, **kwargs):
+    def __init__(self, use_sted=False, sigma=1, sted_loss_weight=5.0, time_only=False, exclude_cls = False,**kwargs):
         self.use_sted = use_sted
         self.sigma = sigma
         self.sted_loss_weight = sted_loss_weight
         self.time_only = time_only
+        self.exclude_cls = exclude_cls
         super().__init__(**kwargs)
 
     def _init_layers(self) -> None:
@@ -395,6 +396,11 @@ class VideoGroundingHead(GroundingDINOHead):
                 loss_dict[f'd{num_dec_layer}.dn_loss_bbox'] = loss_bbox_i
                 loss_dict[f'd{num_dec_layer}.dn_loss_iou'] = loss_iou_i
 
+        '''exclude cls loss'''
+        if self.exclude_cls:
+            for ls in loss_dict:
+                if 'cls' in ls:
+                    loss_dict[ls] = loss_dict[ls] * 0
         '''only time loss'''
         if self.time_only:
             for ls in loss_dict:

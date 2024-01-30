@@ -51,6 +51,7 @@ def parse_args():
     )
     parser.add_argument('--not-show', default=False, action='store_true')
     parser.add_argument('--show-interval', type=float, default=2, help='the interval of show (s)')
+    parser.add_argument('--i_per_v', type=int, default=0, help='show images per video')
     parser.add_argument(
         '--cfg-options',
         nargs='+',
@@ -62,7 +63,6 @@ def parse_args():
         'Note that the quotation marks are necessary and that no white space '
         'is allowed.',
     )
-    parser.add_argument('--output', '-o', type=str, default='./vis', help='output folder')
     parser.add_argument('--sample', '-s', type=int, default=30, help='sample number')
     args = parser.parse_args()
     return args
@@ -174,28 +174,32 @@ def imshow(img, file_name="tmp.jpg", caption='test'):
 
 
 def vis_image(item, args):
-    img_path = osp.basename(item['data_samples'].img_path)
+    img_path = osp.basename(item['data_samples'].video_path)
 
-    out_file = osp.join(args.output_dir, osp.basename(img_path)) if args.output_dir is not None else None
+    out_file = (
+        osp.join(args.output_dir, osp.basename(img_path).split('.')[0])
+        if args.output_dir is not None
+        else None
+    )
 
     if item['inputs'].ndim == 4:
-        for i in range(item['inputs'].shape[0]):
+        if args.i_per_v != 0:
+            i_per_v = args.i_per_v
+        else:
+            i_per_v = item['inputs'].shape[1]
+        for i in range(i_per_v):
             data_sample = item['data_samples'].numpy()
             gt_instances = data_sample.gt_instances
             gt_bboxes = gt_instances.get('bboxes', None)
             if gt_bboxes[i].shape[0] != 0:
-                img = item['inputs'].permute(1, 2, 3, 0).numpy()[i]
+                img = item['inputs'].permute(1, 2, 3, 0).numpy()[i]  # from cbhw to bhwc
                 # img = Image.fromarray(img)
                 img = img[..., [2, 1, 0]]  # bgr to rgb
                 phrase = item['data_samples'].text
                 image_h = img.shape[0]
                 image_w = img.shape[1]
                 new_image = img.copy()
-                img_name = (
-                    item['data_samples'].img_path.split('/')[-1].split('.')[0]
-                    + '_'
-                    + item['data_samples'].img_in_vid_ids[i]
-                )
+                img_name = item['data_samples'].img_in_vid_ids[i]
                 previous_locations = []
                 previous_bboxes = []
                 text_offset = 10
@@ -383,8 +387,8 @@ def visual_per_box(
     previous_bboxes.append((text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2))
 
     file_key_name = img_name + '.jpg'
-    output_path = os.path.join(args.output, file_key_name)
-    imshow(new_image, file_name=output_path,caption=caption)
+    output_path = os.path.join(args.output_dir, file_key_name)
+    imshow(new_image, file_name=output_path, caption=caption)
     return (
         new_image,
         previous_locations,

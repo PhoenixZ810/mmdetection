@@ -119,7 +119,14 @@ class mp4_to_image(BaseTransform):
             [images, targets] = self.spatial_transform([images_list, targets_list])
         else:
             [images, targets] = [images_list, targets_list]
-
+        if 'horizenf' in targets[0]:
+            caption = (
+                results['text']
+                .replace("left", "[TMP]")
+                .replace("right", "left")
+                .replace("[TMP]", "right")
+            )
+            results['text'] = caption
         if inter_idx:  # number of boxes should be the number of frames in annotated moment
             assert len([x for x in targets if len(x["boxes"])]) == inter_idx[-1] - inter_idx[0] + 1, (
                 len([x for x in targets if len(x["boxes"])]),
@@ -165,14 +172,10 @@ class mp4_to_image(BaseTransform):
                 if inter_idx:
                     inter_idx = [x - new_start_idx for x in inter_idx]
 
-        if (
-            self.is_train and len(frame_ids) > self.video_max_len
-        ):  # densely sample video_max_len_train frames
+        if self.is_train and len(frame_ids) > self.video_max_len:  # densely sample video_max_len_train frames
             if inter_idx:
                 starts_list = [
-                    i
-                    for i in range(len(frame_ids))
-                    if inter_idx[0] - self.video_max_len < i <= inter_idx[-1]
+                    i for i in range(len(frame_ids)) if inter_idx[0] - self.video_max_len < i <= inter_idx[-1]
                 ]
             else:
                 starts_list = [i for i in range(len(frame_ids))]
@@ -208,8 +211,8 @@ class mp4_to_image(BaseTransform):
         if self.stride:
             results["img"] = images[:, :: self.stride]
             results["img_all"] = images
-            results['img_shape'] = [h, w]
-            # results['img_shape'] = [images.shape[2], images.shape[3]]
+            results['ori_img_shape'] = [h, w]
+            results['img_shape'] = [images.shape[2], images.shape[3]]
             results["gt_bboxes"] = boxes
             results['img_in_vid_ids'] = image_ids  # video_id + frame_id for all images
             results["gt_bboxes_labels"] = box_labels
@@ -218,8 +221,8 @@ class mp4_to_image(BaseTransform):
             results["frames_id"] = frame_ids
         else:
             results["img"] = images
-            results['img_shape'] = [h, w]
-            # results['img_shape'] = [images.shape[2], images.shape[3]]
+            results['ori_img_shape'] = [h, w]
+            results['img_shape'] = [images.shape[2], images.shape[3]]
             results["gt_bboxes"] = boxes
             results['img_in_vid_ids'] = image_ids
             results["gt_bboxes_labels"] = box_labels
