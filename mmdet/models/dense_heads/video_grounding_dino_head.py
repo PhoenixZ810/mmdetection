@@ -25,8 +25,18 @@ from .deformable_detr_head import DeformableDETRHead
 
 @MODELS.register_module()
 class VideoGroundingHead(GroundingDINOHead):
-    def __init__(self, use_sted=False, sigma=1, sted_loss_weight=5.0, time_only=False, exclude_cls = False,**kwargs):
+    def __init__(
+        self,
+        use_sted=False,
+        use_enc_sted=False,
+        sigma=1,
+        sted_loss_weight=5.0,
+        time_only=False,
+        exclude_cls=False,
+        **kwargs,
+    ):
         self.use_sted = use_sted
+        self.use_enc_sted = use_enc_sted
         self.sigma = sigma
         self.sted_loss_weight = sted_loss_weight
         self.time_only = time_only
@@ -54,7 +64,14 @@ class VideoGroundingHead(GroundingDINOHead):
 
         '''branch for start and end time prediction'''
         if self.use_sted:
-            self.sted_embed = MLP(self.embed_dims, self.embed_dims, 2, 2)
+            self.sted_branch = MLP(self.embed_dims, self.embed_dims, 2, 2)
+        if self.use_enc_sted:
+            if self.share_pred_layer:
+                self.sted_branch = nn.ModuleList([self.sted_branch, self.sted_branch])
+            else:
+                self.sted_branch = nn.ModuleList(
+                    [copy.deepcopy(self.sted_branch), copy.deepcopy(self.sted_branch)]
+                )
 
     def forward(
         self,
@@ -99,7 +116,10 @@ class VideoGroundingHead(GroundingDINOHead):
         all_layers_outputs_coords = []
 
         if self.use_sted:
-            outputs_sted = self.sted_embed(hidden_states[-1])
+            if self.use_enc_sted:
+                outputs_sted = self.sted_branch[1](hidden_states[-1])
+            else:
+                outputs_sted = self.sted_branch(hidden_states[-1])
         else:
             outputs_sted = None
 
@@ -142,6 +162,7 @@ class VideoGroundingHead(GroundingDINOHead):
         batch_data_samples: SampleList,
         use_dn: bool,
         dn_meta: Dict[str, int],
+        enc_outputs_sted=None,
     ) -> dict:
         """Perform forward propagation and loss calculation of the detection
         head on the queries of the upstream network.
@@ -202,13 +223,14 @@ class VideoGroundingHead(GroundingDINOHead):
         loss_inputs = outs + (
             enc_outputs_class,
             enc_outputs_coord,
+            enc_outputs_sted,
             batch_gt_instances,
             batch_img_metas,
             use_dn,
             dn_meta,
             time_mask,
             durations,
-            inter_idx,
+            inter_idx
         )
         losses = self.loss_by_feat(*loss_inputs)
         return losses
@@ -220,6 +242,7 @@ class VideoGroundingHead(GroundingDINOHead):
         outputs_sted,
         enc_cls_scores: Tensor,
         enc_bbox_preds: Tensor,
+        enc_outputs_sted: Tensor,
         batch_gt_instances: InstanceList,
         batch_img_metas: List[dict],
         use_dn: bool,
@@ -315,23 +338,16 @@ class VideoGroundingHead(GroundingDINOHead):
                 enc_cls_scores = torch.index_select(original_enc_cls_scores, 0, keep)
                 enc_bbox_preds = torch.index_select(original_enc_bbox_preds, 0, keep)
             # print('batch_img_metas=', len(batch_img_metas), 'keep=', len(keep))
-            # for i in keep:
-            #     if len(batch_img_metas) < int(i) + 1:
-            #         print(keep, file=sys.stderr)
-            #         print(len(batch_img_metas), len(batch_gt_instances), file=sys.stderr)
-            #         print(batch_img_metas[0], file=sys.stderr)
             img_metas = [batch_img_metas[i] for i in keep]
             gt_instances = [batch_gt_instances[i] for i in keep]
             batch_img_metas = img_metas
             batch_gt_instances = gt_instances
-            # print('after_keep=', len(batch_img_metas))
         else:
             self.keep = keep
             all_layers_matching_cls_scores = original_all_layers_matching_cls_scores
             all_layers_matching_bbox_preds = original_all_layers_matching_bbox_preds
             enc_bbox_preds = original_enc_bbox_preds
             enc_cls_scores = original_enc_cls_scores
-            # print('not_after_keep=', all_layers_matching_cls_scores.shape)
 
         loss_dict = super(DeformableDETRHead, self).loss_by_feat(
             all_layers_matching_cls_scores,
@@ -375,6 +391,9 @@ class VideoGroundingHead(GroundingDINOHead):
             elif time_mask is None:
                 positive_map = None
             loss_dict.update(self.loss_sted(outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
+            if self.use_enc_sted:
+                loss_enc=(self.loss_sted(enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
+                loss_dict['enc_loss_sted'] = loss_enc['loss_sted']
 
         if all_layers_denoising_cls_scores is not None and use_dn:
             # calculate denoising loss from all decoder layers

@@ -285,21 +285,23 @@ class VideoGroundingDinoTransformerDecoder(GroundingDinoTransformerDecoder):
 
 
 class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderLayer):
-    def __init__(self, *args, time_attn_cfg=None, **kwargs):
+    def __init__(self, *args, use_self_attn=True, time_query_type='tq', time_attn_cfg=None, **kwargs):
         self.time_attn_cfg = time_attn_cfg
+        self.use_self_attn = use_self_attn
+        self.time_query_type = time_query_type
         super().__init__(*args, **kwargs)
 
     def _init_layers(self) -> None:
         """Initialize self_attn, cross-attn, ffn, and norms."""
-        self.self_attn = None
-        # self.self_attn = MultiheadAttention(**self.self_attn_cfg)
+        if self.use_self_attn:
+            self.self_attn = MultiheadAttention(**self.self_attn_cfg)
         if self.time_attn_cfg is not None:
             self.time_attn = MultiheadAttention(**self.time_attn_cfg)
         self.cross_attn_text = MultiheadAttention(**self.cross_attn_text_cfg)
         self.cross_attn = MultiScaleDeformableAttention(**self.cross_attn_cfg)
-        self.embed_dims = self.self_attn_cfg['embed_dims']
+        self.embed_dims = self.cross_attn_cfg['embed_dims']
         self.ffn = FFN(**self.ffn_cfg)
-        if self.time_attn_cfg is not None and self.self_attn is not None:
+        if self.time_attn_cfg is not None and self.use_self_attn:
             norms_list = [build_norm_layer(self.norm_cfg, self.embed_dims)[1] for _ in range(5)]
         else:
             norms_list = [build_norm_layer(self.norm_cfg, self.embed_dims)[1] for _ in range(4)]
@@ -357,31 +359,50 @@ class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderL
 
         if time_embed is not None and self.time_attn_cfg is not None:
             # temporal_self_attention
-            query = self.time_attn(
-                query=query.transpose(0, 1),
-                key=query.transpose(0, 1),
-                value=query.transpose(0, 1),
-                query_pos=query_pos.transpose(0, 1) + time_embed.transpose(0, 1),
-                key_pos=query_pos.transpose(0, 1) + time_embed.transpose(0, 1),
-                # query_pos=query_pos.transpose(0, 1),
-                # key_pos=query_pos.transpose(0, 1),
-                attn_mask=self_attn_mask,
-                **kwargs,
-            ).transpose(0, 1)
+            if self.time_query_type == 'tq':
+                query = self.time_attn(
+                    query=query.transpose(0, 1),
+                    key=query.transpose(0, 1),
+                    value=query.transpose(0, 1),
+                    query_pos=query_pos.transpose(0, 1) + time_embed.transpose(0, 1),
+                    key_pos=query_pos.transpose(0, 1) + time_embed.transpose(0, 1),
+                    attn_mask=self_attn_mask,
+                    **kwargs,
+                ).transpose(0, 1)
+            elif self.time_query_type == 'q':
+                query = self.time_attn(
+                    query=query.transpose(0, 1),
+                    key=query.transpose(0, 1),
+                    value=query.transpose(0, 1),
+                    query_pos=query_pos.transpose(0, 1),
+                    key_pos=query_pos.transpose(0, 1),
+                    attn_mask=self_attn_mask,
+                    **kwargs,
+                ).transpose(0, 1)
+            elif self.time_query_type == 't':
+                query = self.time_attn(
+                    query=query.transpose(0, 1),
+                    key=query.transpose(0, 1),
+                    value=query.transpose(0, 1),
+                    query_pos=time_embed.transpose(0, 1),
+                    key_pos=time_embed.transpose(0, 1),
+                    attn_mask=self_attn_mask,
+                    **kwargs,
+                ).transpose(0, 1)
             query = self.norms[0](query)
 
-        # # image self attention
-        # query = self.self_attn(
-        #     query=query,
-        #     key=query,
-        #     value=query,
-        #     query_pos=query_pos,
-        #     key_pos=query_pos,
-        #     attn_mask=self_attn_mask,
-        #     **kwargs,
-        # )
-        # query = self.norms[1](query) if len(self.norms) == 5 else self.norms[0](query)
-
+        if self.use_self_attn:
+            # image self attention
+            query = self.self_attn(
+                query=query,
+                key=query,
+                value=query,
+                query_pos=query_pos,
+                key_pos=query_pos,
+                attn_mask=self_attn_mask,
+                **kwargs,
+            )
+            query = self.norms[1](query) if len(self.norms) == 5 else self.norms[0](query)
 
         # cross attention between query and text
         query = self.cross_attn_text(

@@ -32,7 +32,7 @@ class VideoGroundingDINO(GroundingDINO):
         max_time_pos_frames=200,
         freeze_backbone=False,
         freeze_language_model=False,
-        freeze_encoder = False,
+        freeze_encoder=False,
         *args,
         **kwargs,
     ) -> None:
@@ -153,6 +153,12 @@ class VideoGroundingDINO(GroundingDINO):
         topk_coords = topk_coords_unact.sigmoid()
         topk_coords_unact = topk_coords_unact.detach()
 
+        if self.bbox_head.use_enc_sted:
+            enc_outputs_sted = self.bbox_head.sted_branch[0](output_memory)
+            topk_sted = torch.gather(
+                enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2)
+            )
+
         query = self.query_embedding.weight[:, None, :]
         query = query.repeat(1, bs, 1).transpose(0, 1)
 
@@ -202,11 +208,23 @@ class VideoGroundingDINO(GroundingDINO):
         # NOTE DINO calculates encoder losses on scores and coordinates
         # of selected top-k encoder queries, while DeformDETR is of all
         # encoder queries.
-        head_inputs_dict = (
-            dict(enc_outputs_class=topk_score, enc_outputs_coord=topk_coords, dn_meta=dn_meta)
-            if self.training
-            else dict()
-        )
+        if self.bbox_head.use_enc_sted:
+            head_inputs_dict = (
+                dict(
+                    enc_outputs_class=topk_score,
+                    enc_outputs_coord=topk_coords,
+                    dn_meta=dn_meta,
+                    enc_outputs_sted=topk_sted,
+                )
+                if self.training
+                else dict()
+            )
+        else:
+            head_inputs_dict = (
+                dict(enc_outputs_class=topk_score, enc_outputs_coord=topk_coords, dn_meta=dn_meta)
+                if self.training
+                else dict()
+            )
         # append text_feats to head_inputs_dict
         head_inputs_dict['memory_text'] = memory_text
         head_inputs_dict['text_token_mask'] = text_token_mask

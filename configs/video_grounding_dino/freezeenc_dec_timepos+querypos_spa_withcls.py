@@ -18,7 +18,7 @@ model = dict(
     max_time_pos_frames=200,
     freeze_backbone=True,
     freeze_language_model=True,
-    freeze_encoder=True,
+    freeze_encoder=False,
     data_preprocessor=dict(
         type='VideoDataPreprocessor',
         do_round=False,
@@ -92,7 +92,10 @@ model = dict(
         layer_cfg=dict(
             # query temporal self-attention layer
             time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
+            # time query type
+            time_query_type='tq',
             # query self attention layer
+            use_self_attn=True,
             self_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
             # cross attention layer query to text
             cross_attn_text_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
