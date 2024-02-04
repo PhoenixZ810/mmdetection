@@ -1,8 +1,9 @@
 _base_ = [
-    './freezeenc_dec_timepos+querypos_spa_withcls.py',
+    './freezeenc_dec_timepos+querypos_spa.py',
 ]
 # pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
 load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_dino/v3det_1/epoch_30.pth'
+# load_from = '/mnt/data/mmperc/chenyicheng/code/mmdetection/work_dirs/mixed_o365_goldg_grit_all_v3det_share124_rec/epoch_13.pth'
 lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
@@ -19,9 +20,9 @@ model = dict(
         type='VideoDataPreprocessor',
         do_round=False,
         div_vid=0,
-        mean=[123.675, 116.28, 103.53],
-        std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True,
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225],
     ),
     language_model=dict(
         type='BertModel',
@@ -135,4 +136,17 @@ model = dict(
         )
     ),
     test_cfg=dict(max_per_img=1),
+)
+optim_wrapper = dict(
+    _delete_=True,
+    type='OptimWrapper',
+    optimizer=dict(type='AdamW', lr=0.00004, weight_decay=0.0001),  # bs=16 0.0001
+    clip_grad=dict(max_norm=0.1, norm_type=2),
+    paramwise_cfg=dict(
+        custom_keys={
+            'absolute_pos_embed': dict(decay_mult=0.0),
+            'backbone': dict(lr_mult=0.1),
+            'language_model': dict(lr_mult=0.1),
+        }
+    ),
 )

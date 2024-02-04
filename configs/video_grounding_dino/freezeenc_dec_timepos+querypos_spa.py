@@ -23,9 +23,9 @@ model = dict(
         type='VideoDataPreprocessor',
         do_round=False,
         div_vid=0,
-        mean=[123.675, 116.28, 103.53],
-        std=[58.395, 57.12, 57.375],
-        bgr_to_rgb=True,
+        bgr_to_rgb=False,
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225],
     ),
     language_model=dict(
         type='BertModel',
@@ -146,7 +146,7 @@ max_size = 213
 resizes = [80, 100, 120]
 crop = 64
 test_size = [128]
-cautious = True
+
 video_train_pipeline = [
     dict(
         type='mp4_to_image',
@@ -179,7 +179,7 @@ video_train_pipeline = [
                 #     ],
                 # ),
                 dict(type='VideoToTensor'),
-                # dict(type='VideoBoxNormalize'), # ordinate normalization, xyxy
+                # dict(type='VideoNormalize', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ],
         ),
     ),
@@ -212,9 +212,9 @@ video_test_pipeline = [
             transforms=[
                 dict(type='VideoRandomResize', sizes=test_size, max_size=max_size),
                 dict(type='VideoToTensor'),
+                # dict(type='VideoNormalize', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ],
-        )
-        # dict(type='VideoBoxNormalize', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ),
     ),
     dict(
         type='PackDetInputs',

@@ -28,9 +28,9 @@ from mmengine.config import Config, DictAction
 from mmengine.registry import init_default_scope
 from mmengine.utils import ProgressBar
 
-from mmdet.models.utils import mask2ndarray
+# from mmdet.models.utils import mask2ndarray
 from mmdet.registry import DATASETS, VISUALIZERS
-from mmdet.structures.bbox import BaseBoxes
+# from mmdet.structures.bbox import BaseBoxes
 from mmdet.apis import VideoInferencer
 
 
@@ -38,6 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Browse a dataset')
     parser.add_argument('config', help='train config file path')
     parser.add_argument(
+        '-o',
         '--output-dir',
         default='debug/visual_res',
         type=str,
@@ -80,7 +81,8 @@ def main():
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
-
+    if not osp.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     # register all modules in mmdet into the registries
     init_default_scope(cfg.get('default_scope', 'mmdet'))
 
@@ -111,20 +113,20 @@ class video_visualizer:
         if predicts is not None:
             pred_boxes = [pred.pred_instances.bboxes for pred in predicts]
             pred_scores = [pred.pred_instances.scores for pred in predicts]
-            pred_sted = [pred.pred_instances.sted for pred in predicts]
+            # pred_sted = [pred.pred_instances.sted for pred in predicts]
 
             if item['inputs'].ndim == 4:
                 if args.i_per_v != 0:
                     i_per_v = args.i_per_v
                 else:
                     i_per_v = item['inputs'].shape[0]
+                data_samples = item['data_samples']
+                # gt_instances = data_sample.gt_instances
+                # gt_bboxes = gt_instances.get('bboxes', None)
+                gt_bboxes = [
+                    datasample.gt_instances.get('bboxes', None).numpy() for datasample in data_samples
+                ]
                 for i in range(i_per_v):
-                    data_samples = item['data_samples']
-                    # gt_instances = data_sample.gt_instances
-                    # gt_bboxes = gt_instances.get('bboxes', None)
-                    gt_bboxes = [
-                        datasample.gt_instances.get('bboxes', None).numpy() for datasample in data_samples
-                    ]
                     if gt_bboxes[i].shape[0] != 0:
                         img = item['inputs'].permute(0,2,3,1).numpy()[i]  # from cbhw to bhwc
                         # img = Image.fromarray(img)
@@ -134,10 +136,18 @@ class video_visualizer:
                         image_w = img.shape[1]
                         new_image = img.copy()
                         img_name = item['data_samples'][i].img_in_vid_ids
+
+                        file_key_name = img_name + '.jpg'
+                        # plt.imshow(img[..., [2, 1, 0]])
+                        # plt.axis('off')
+                        # plt.savefig(file_key_name,bbox_inches='tight', pad_inches=0)
+
                         previous_locations = []
                         previous_bboxes = []
                         text_offset = 10
                         text_offset_original = 4
+                        gt_bbox = gt_bboxes[i].squeeze(0)
+                        pred_bbox = pred_boxes[i].squeeze(0)
                         (
                             new_image,
                             previous_locations,
@@ -150,7 +160,7 @@ class video_visualizer:
                             f'GT',
                             image_h,
                             image_w,
-                            gt_bboxes[i].squeeze(0),
+                            gt_bbox,
                             previous_locations,
                             previous_bboxes,
                             text_offset,
@@ -170,7 +180,7 @@ class video_visualizer:
                             f'Pred  {float(pred_scores[i][0])}',
                             image_h,
                             image_w,
-                            pred_boxes[i].squeeze(0),
+                            pred_bbox,
                             previous_locations,
                             previous_bboxes,
                             text_offset,
@@ -249,7 +259,6 @@ class video_visualizer:
         text_line = int(max(1 * min(image_h, image_w) / 512, 1))
         box_line = int(max(2 * min(image_h, image_w) / 512, 2))
         text_height = text_offset  # init
-
         x1, y1, x2, y2 = (
             int(bbox[0]),
             int(bbox[1]),
@@ -371,6 +380,7 @@ class video_visualizer:
 
 
 if __name__ == '__main__':
+    # import pdb;pdb.set_trace()
     main()
     # you need to download the jsonl before run this file
 

@@ -123,6 +123,7 @@ class VideoModulatedSTGrounding(BaseDetDataset):
                 "inter_frames": inter_frames,
                 "trajectory": trajectory,
                 "text": caption,
+                # "text":'person.',
                 "qtype": {video_id: video["qtype"]},
                 "dataset_mode": 'vidstg',
                 "tube_start_frame": tube_start_frame,

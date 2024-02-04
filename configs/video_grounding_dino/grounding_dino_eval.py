@@ -10,7 +10,7 @@ model = dict(
     num_queries=1,
     with_box_refine=True,
     as_two_stage=True,
-    use_time_embed=True,
+    use_time_embed=False,
     max_time_pos_frames=200,
     freeze_backbone=True,
     freeze_language_model=True,
@@ -19,9 +19,9 @@ model = dict(
         type='VideoDataPreprocessor',
         do_round=False,
         div_vid=0,
-        mean=[123.675, 116.28, 103.53],
-        std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True,
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225],
     ),
     language_model=dict(
         type='BertModel',
@@ -87,7 +87,7 @@ model = dict(
         return_intermediate=True,
         layer_cfg=dict(
             # query temporal self-attention layer
-            time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
+            time_attn_cfg=None,
             # time query type
             time_query_type='q',
             # query self attention layer
@@ -135,3 +135,88 @@ model = dict(
     ),
     test_cfg=dict(max_per_img=1),
 )
+
+dataset_type = 'ODVGDataset'
+data_root = 'data/'
+
+# scales = [96, 128]
+# max_size = 213
+# resizes = [80, 100, 120]
+# crop = 64
+# test_size = [128]
+
+scales = [192, 224, 256, 288, 320]
+max_size = 533
+resizes = [200, 240, 280]
+crop = 160
+test_size = [320]
+
+video_test_pipeline = [
+    dict(
+        type='mp4_to_image',
+        video_max_len_val=200,
+        fps=5,
+        is_train=False,
+        spatial_transform=dict(
+            type='Compose',
+            transforms=[
+                dict(type='VideoRandomResize', sizes=test_size, max_size=max_size),
+                dict(type='VideoToTensor'),
+            ],
+        ),
+    ),
+    dict(
+        type='PackDetInputs',
+        meta_keys=(
+            'video_id',
+            'video_path',
+            'ori_shape',
+            'img_shape',
+            'text',
+            'frames_id',
+            'inter_idx',
+            'inter_frames',
+            'img_in_vid_ids',
+            'qtype',
+            'tube_start_frame',
+            'tube_end_frame',
+            'tokens_positive',
+            'dataset_mode',
+        ),
+    ),
+]
+val_dataloader = dict(
+    batch_size=1,
+    num_workers=4,
+    persistent_workers=True,
+    drop_last=False,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type='VideoModulatedSTGrounding',
+        data_root=data_root,
+        ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+        # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
+        data_prefix=dict(img='VidSTG/video/'),
+        test_mode=True,
+        video_max_len=100,
+        pipeline=video_test_pipeline,
+        backend_args=None,
+    ),
+)
+# val_dataloader = None
+# val_dataloader = dict(dataset=dict(pipeline=test_pipeline, return_classes=True))
+test_dataloader = val_dataloader
+
+val_evaluator = dict(
+    type='VidstgMetric',
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+    # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
+    metric='bbox',
+    format_only=False,
+    backend_args=None,
+    use_sted=False,
+    tmp_loc=False,
+    postprocessors=['vidstg'],
+)
+# val_evaluator = None
+test_evaluator = val_evaluator

@@ -1,5 +1,5 @@
 _base_ = [
-    './freezeenc_dec_timepos+querypos_spa_withcls.py',
+    './freezeenc_dec_timepos+querypos_spa.py',
 ]
 # pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
 load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_dino/v3det_1/epoch_30.pth'

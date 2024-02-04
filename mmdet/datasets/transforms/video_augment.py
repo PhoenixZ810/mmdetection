@@ -67,6 +67,22 @@ class VideoBoxNormalize(object):
 
 
 @TRANSFORMS.register_module()
+class VideoNormalize(object):
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, data):
+        video = data[0]
+        targets = data[1]
+        video = normalize(video, mean=self.mean, std=self.std)  # torch functional videotransforms
+        if targets is None:
+            return video, None
+
+        return [video, targets]
+
+
+@TRANSFORMS.register_module()
 class VideoRandomHorizontalFlip(object):
     def __init__(self, p=0.5):
         self.p = p

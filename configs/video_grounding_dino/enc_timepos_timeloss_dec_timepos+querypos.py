@@ -1,5 +1,5 @@
 _base_ = [
-    './freezeenc_dec_timepos+querypos_spa_withcls.py',
+    './freezeenc_dec_timepos+querypos_spa.py',
 ]
 # pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
 load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_dino/v3det_1/epoch_30.pth'
@@ -19,9 +19,9 @@ model = dict(
         type='VideoDataPreprocessor',
         do_round=False,
         div_vid=0,
-        mean=[123.675, 116.28, 103.53],
-        std=[58.395, 57.12, 57.375],
         bgr_to_rgb=True,
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225],
     ),
     language_model=dict(
         type='BertModel',
@@ -112,7 +112,7 @@ model = dict(
         ),  # 2.0 in DeformDETR
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
-        use_enc_sted = True,
+        use_enc_sted=True,
         sted_loss_weight=10.0,
         time_only=False,
         exclude_cls=False,
