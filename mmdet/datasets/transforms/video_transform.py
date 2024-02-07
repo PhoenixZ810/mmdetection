@@ -30,8 +30,8 @@ class mp4_to_image(BaseTransform):
         self.spatial_transform = TRANSFORMS.build(spatial_transform)
 
     def transform(self, results):
-        if results["dataset_mode"] == "vidstg":
-            return self.vidstg_transform(results)
+        # if results["dataset_mode"] == "vidstg":
+        return self.vidstg_transform(results)
 
     def vidstg_transform(self, results):
         # ffmpeg decoding
@@ -43,9 +43,13 @@ class mp4_to_image(BaseTransform):
         inter_frames = results["inter_frames"]
         vid_path = results["video_path"]
         trajectory = results["trajectory"]
-
-        ss = clip_start / video_fps  # 视频开始时间
-        t = (clip_end - clip_start) / video_fps  # 视频持续时间
+        dataset = results['dataset_mode']
+        if dataset == 'vidstg':
+            ss = clip_start / video_fps  # 视频开始时间
+            t = (clip_end - clip_start) / video_fps  # 视频持续时间
+        elif dataset == 'hcstvg':
+            ss = 0
+            t = 20
         # print(vid_path)
         try:
             cmd = ffmpeg.input(vid_path, ss=ss, t=t).filter(
@@ -105,7 +109,13 @@ class mp4_to_image(BaseTransform):
         inter_idx = []  # list of indexes of the frames in the annotated moment
         for i_img, img_id in enumerate(frame_ids):
             if img_id in inter_frames:
-                anns = trajectory[str(img_id)]  # dictionary with bbox [left, top, width, height] key
+                if dataset == 'vidstg':
+                    anns = trajectory[str(img_id)]  # dictionary with bbox [left, top, width, height] key
+                elif dataset == 'hcstvg':
+                    bbox = trajectory[
+                        img_id - results["tube_start_frame"]
+                    ]  # dictionary with bbox [left, top, width, height] key
+                    anns = {"bbox": bbox}
                 anns = [anns]
                 inter_idx.append(i_img)
             else:
@@ -207,7 +217,7 @@ class mp4_to_image(BaseTransform):
         for i in inter_idx:
             inter_frames.append(f"{video_id}_{frame_ids[i]}")
         results["inter_idx"] = [inter_idx[0], inter_idx[-1]] if inter_idx else [-100, -100]
-
+        # print(len(frame_ids))
         if self.stride:
             results["img"] = images[:, :: self.stride]
             results["img_all"] = images

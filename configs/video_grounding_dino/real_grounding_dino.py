@@ -3,7 +3,7 @@ load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_di
 lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 model = dict(
     type='GroundingDINO',
-    num_queries=900,
+    num_queries=1,
     data_preprocessor=dict(
         type='VideoDataPreprocessor',
         do_round=False,
@@ -72,17 +72,17 @@ model = dict(
     ),
     test_cfg=dict(max_per_img=1),
 )
-scales = [192, 224, 256, 288, 320]
-max_size = 533
-resizes = [200, 240, 280]
-crop = 160
-test_size = [320]
+# scales = [192, 224, 256, 288, 320]
+# max_size = 533
+# resizes = [200, 240, 280]
+# crop = 160
+# test_size = [320]
 
-# scales = [96, 128]
-# max_size = 213
-# resizes = [80, 100, 120]
-# crop = 64
-# test_size = [128]
+scales = [96, 128]
+max_size = 213
+resizes = [80, 100, 120]
+crop = 64
+test_size = [128]
 
 video_test_pipeline = [
     dict(

@@ -23,7 +23,7 @@ from ..functional import bbox_overlaps
 
 
 @METRICS.register_module()
-class VidstgMetric(BaseMetric):
+class VideoMetric(BaseMetric):
     """COCO evaluation metric.
 
     Evaluate AR, AP, and mAP for detection tasks including proposal/box
@@ -236,10 +236,13 @@ class VidstgMetric(BaseMetric):
             self.predictions.update(r)
         for r in video_res:
             self.video_predictions.update(r)
-        sum = self.summarize()
+        if self.postprocessors == 'vidstg':
+            sum = self.vidstg_summarize()
+        elif self.postprocessors == 'hcstvg':
+            sum = self.hcstvg_summarize()
         return sum
 
-    def summarize(self):
+    def vidstg_summarize(self):
         results = self.eval(self.predictions, self.video_predictions)
         categories = set(x["qtype"] for x in results.values())
         metrics = {}
@@ -269,15 +272,36 @@ class VidstgMetric(BaseMetric):
                 metrics[category][key] = metrics[category][key] / counter[category]
                 print(f"{category} {key}: {metrics[category][key]:.4f}")
         out = {f"{qtype}_{name}": metrics[qtype][name] for qtype in metrics for name in metrics[qtype]}
-        # if self.save_pred:
-        #     out["predictions"] = self.predictions
-        #     out["video_predictions"] = self.video_predictions
-        #     out["vid_metrics"] = self.results
-        #     if len(self.tsa_weights):
-        #         out["tsa_weights"] = self.tsa_weights
-        #         out["text_weights"] = self.text_weights
-        #         out["spatial_weights"] = self.spatial_weights
-        #         out["pred_sted"] = self.pred_sted
+        return out
+
+    def hcstvg_summarize(self):
+        results = self.eval(self.predictions, self.video_predictions)
+        # if dist.is_main_process():
+        # self.results = self.evaluator.evaluate(
+        #     self.predictions, self.video_predictions
+        # )
+        metrics = {"gt_viou": 0}
+        if self.tmp_loc:
+            metrics.update({"tiou": 0, "viou": 0})
+        for thresh in self.iou_thresholds:  # init metrics
+            if self.tmp_loc:
+                metrics[f"viou@{thresh}"] = 0
+            metrics[f"gt_viou@{thresh}"] = 0
+        counter = 0
+        for x in results.values():  # sum results
+            if self.tmp_loc:
+                metrics["tiou"] += x["tiou"]
+                metrics["viou"] += x["viou"]
+            metrics["gt_viou"] += x["gt_viou"]
+            for thresh in self.iou_thresholds:
+                if self.tmp_loc:
+                    metrics[f"viou@{thresh}"] += x[f"viou@{thresh}"]
+                metrics[f"gt_viou@{thresh}"] += x[f"gt_viou@{thresh}"]
+            counter += 1
+        for key in metrics:  # average results
+            metrics[key] = metrics[key] / counter
+            print(f"{key}: {metrics[key]:.4f}")
+        out = {f"{name}": metrics[name] for name in metrics}
         return out
 
     def eval(self, predictions: List[Dict], video_predictions: List[Dict]):
@@ -299,7 +323,8 @@ class VidstgMetric(BaseMetric):
                         break
 
                 pred_sted = video_pred["sted"]
-            qtype = video_pred["qtype"]
+            if self.postprocessors == 'vidstg':
+                qtype = video_pred["qtype"]
 
             # collect frames_id and inter_frames in this video
             inter_frames = []
@@ -325,21 +350,34 @@ class VidstgMetric(BaseMetric):
                     tiou = intersection / union
 
                 # compute viou and gt_viou
-                vid_metrics[video_id] = {
-                    "gt_sted": gt_sted,
-                    "pred_sted": pred_sted,
-                    "tiou": tiou,
-                    "qtype": qtype,
-                    "img_metrics": {},
-                }
+                if self.postprocessors == 'vidstg':
+                    vid_metrics[video_id] = {
+                        "gt_sted": gt_sted,
+                        "pred_sted": pred_sted,
+                        "tiou": tiou,
+                        "qtype": qtype,
+                        "img_metrics": {},
+                    }
+                else:
+                    vid_metrics[video_id] = {
+                        "gt_sted": gt_sted,
+                        "pred_sted": pred_sted,
+                        "tiou": tiou,
+                        "img_metrics": {},
+                    }
                 union_predgt = [frame_id for frame_id in frame_ids if min_start <= frame_id < max_end]
                 inter_predgt = set([frame_id for frame_id in frame_ids if max_start <= frame_id < min_end])
                 viou = 0
             else:
-                vid_metrics[video_id] = {
-                    "qtype": qtype,
-                    "img_metrics": {},
-                }
+                if self.postprocessors == 'vidstg':
+                    vid_metrics[video_id] = {
+                        "qtype": qtype,
+                        "img_metrics": {},
+                    }
+                else:
+                    vid_metrics[video_id] = {
+                        "img_metrics": {},
+                    }
                 union_predgt = frame_ids
                 inter_predgt = frame_ids
             gt_viou = 0

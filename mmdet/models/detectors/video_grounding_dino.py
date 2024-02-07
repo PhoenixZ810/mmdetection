@@ -92,7 +92,8 @@ class VideoGroundingDINO(GroundingDINO):
 
         if self.use_time_embed:
             time_embed = self.time_embed(feat_pos.shape[0]).to(feat_pos.device)
-
+        else:
+            time_embed = None
         memory, memory_text = self.encoder(
             query=feat,
             query_pos=feat_pos,

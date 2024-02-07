@@ -18,7 +18,7 @@ import random
 
 
 @DATASETS.register_module()
-class VidVideoModulatedSTGrounding(BaseDetDataset):
+class HCVideoModulatedSTGrounding(BaseDetDataset):
     def __init__(
         self,
         *args,
@@ -67,12 +67,13 @@ class VidVideoModulatedSTGrounding(BaseDetDataset):
                 data_list = json.load(f)
         out_data_list = []
         empty_video = []
-        for i_vid, video in enumerate(data_list['videos']):
-            video_fps = video["fps"]  # used for extraction
+        for i_vid, video in enumerate(data_list):
+            video_num_images = video["frame_count"]
+            video_fps = video_num_images / 20  # duration of videos in HC-STVG is 20s
             sampling_rate = self.fps / video_fps  # 采样率
             assert sampling_rate <= 1  # downsampling at fps
-            start_frame = video["start_frame"] if self.tmp_loc else video["tube_start_frame"]
-            end_frame = video["end_frame"] if self.tmp_loc else video["tube_end_frame"]
+            start_frame = 0 if self.tmp_loc else video["tube_start_frame"]
+            end_frame = video_num_images - 1 if self.tmp_loc else video["tube_end_frame"]
             frame_ids = [start_frame]
             for frame_id in range(start_frame, end_frame):  # 按照采样率保留帧
                 if int(frame_ids[-1] * sampling_rate) < int(frame_id * sampling_rate):
@@ -101,11 +102,56 @@ class VidVideoModulatedSTGrounding(BaseDetDataset):
             caption = video["caption"]
             video_id = video["video_id"]
             video_original_id = video["original_video_id"]
-            clip_start = video["start_frame"]  # included
-            clip_end = video["end_frame"]  # excluded
+            clip_start = 0
+            clip_end = video["frame_count"] - 1
             # frame_ids, inter_frames = self.vid2imgids[video_id]
-            trajectory = data_list["trajectories"][video_original_id][str(video["target_id"])]
-            vid_path = os.path.join(self.data_prefix['img'], video["video_path"])
+            trajectory = video["trajectory"]
+            if video['video_path'] not in ['47_uNT6HrrnqPU.mp4'] and video['video_path'] not in [
+                '45_1XZZnWMP4CU.mkv',
+                '142_1XZZnWMP4CU.mkv',
+                '106_1XZZnWMP4CU.mkv',
+                '73_1XZZnWMP4CU.mkv',
+                '76_1XZZnWMP4CU.mkv',
+                '37_kLDpP9QEVBs.mp4',
+                '65_1XZZnWMP4CU.mkv',
+                '149_1XZZnWMP4CU.mkv',
+                '102_1XZZnWMP4CU.mkv',
+                '21_1XZZnWMP4CU.mkv',
+                '101_1XZZnWMP4CU.mkv',
+                '99_UOfuzrwkclM.mkv',
+                '169_UOyyTUX5Vo4.mp4',
+                '77_VsYPP2I0aUQ.mp4',
+                '107_1XZZnWMP4CU.mkv',
+                '115_1XZZnWMP4CU.mkv',
+                '133_1XZZnWMP4CU.mkv',
+                '92_1ReZIMmD_8E.mp4',
+                '53_1XZZnWMP4CU.mkv',
+                '47_1XZZnWMP4CU.mkv',
+                '24_1XZZnWMP4CU.mkv',
+                '34_1XZZnWMP4CU.mkv',
+                '77_1XZZnWMP4CU.mkv',
+                '118_1XZZnWMP4CU.mkv',
+                '70_1XZZnWMP4CU.mkv',
+                '111_1XZZnWMP4CU.mkv',
+                '242_kW5WyJ1QNpM.mkv',
+                '94_1XZZnWMP4CU.mkv',
+                '71_1XZZnWMP4CU.mkv',
+                '47_uNT6HrrnqPU.mp4',
+                '43_1XZZnWMP4CU.mkv',
+                '105_1XZZnWMP4CU.mkv',
+                '51_1XZZnWMP4CU.mkv',
+                '99_1XZZnWMP4CU.mkv',
+                '130_1XZZnWMP4CU.mkv',
+                '147_1XZZnWMP4CU.mkv',
+                '55_RW-H3fN_79I.mp4',
+                '144_1XZZnWMP4CU.mkv',
+                '44_1XZZnWMP4CU.mkv',
+                '1_aMYcLyh9OhU.mkv',
+            ]:
+                vid_path = os.path.join(self.data_prefix['img'], video["video_path"])
+            else:
+                print(video['video_path'])
+                continue
             w = video["width"]
             h = video["height"]
             tube_start_frame = video["tube_start_frame"]
@@ -124,8 +170,7 @@ class VidVideoModulatedSTGrounding(BaseDetDataset):
                 "trajectory": trajectory,
                 "text": caption,
                 # "text":'person.',
-                "qtype": {video_id: video["qtype"]},
-                "dataset_mode": 'vidstg',
+                "dataset_mode": 'hcstvg',
                 "tube_start_frame": tube_start_frame,
                 "tube_end_frame": tube_end_frame,
                 'tokens_positive': -1,

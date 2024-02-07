@@ -3,6 +3,7 @@ import os
 import requests
 from urllib.parse import urlparse
 from requests.exceptions import HTTPError
+from tqdm import tqdm
 
 import sys
 from pathlib import Path
@@ -94,8 +95,14 @@ def main():
             predicts = inferencer(item)
             visualizer.vis_image(item=item, args=args, predicts=predicts)
     else:
-        for item in dataset:
-            visualizer.vis_image(item=item, args=args)
+        try:
+            for item in tqdm(dataset, total=len(dataset)):
+                pass
+        except:
+            print(f"Error in dataset:{item['data_samples'].video_path}")
+            # raise
+        # for item in dataset:
+        #     visualizer.vis_image(item=item, args=args)
 
 
 class video_visualizer:
@@ -128,7 +135,7 @@ class video_visualizer:
                 ]
                 for i in range(i_per_v):
                     if gt_bboxes[i].shape[0] != 0:
-                        img = item['inputs'].permute(0,2,3,1).numpy()[i]  # from cbhw to bhwc
+                        img = item['inputs'].permute(0, 2, 3, 1).numpy()[i]  # from bchw to bhwc
                         # img = Image.fromarray(img)
                         img = img[..., [2, 1, 0]]  # bgr to rgb
                         phrase = item['data_samples'][0].text
@@ -193,23 +200,20 @@ class video_visualizer:
                 if args.i_per_v != 0:
                     i_per_v = args.i_per_v
                 else:
-                    i_per_v = item['inputs'].shape[0]
+                    i_per_v = item['inputs'].shape[1]
                 for i in range(i_per_v):
                     data_samples = item['data_samples']
-                    # gt_instances = data_sample.gt_instances
-                    # gt_bboxes = gt_instances.get('bboxes', None)
-                    gt_bboxes = [
-                        datasample.gt_instances.get('bboxes', None).numpy() for datasample in data_samples
-                    ]
+                    gt_instances = data_samples.gt_instances
+                    gt_bboxes = gt_instances.get('bboxes', None)
                     if gt_bboxes[i].shape[0] != 0:
                         img = item['inputs'].permute(1, 2, 3, 0).numpy()[i]  # from cbhw to bhwc
                         # img = Image.fromarray(img)
                         img = img[..., [2, 1, 0]]  # bgr to rgb
-                        phrase = item['data_samples'][0].text
+                        phrase = item['data_samples'].text
                         image_h = img.shape[0]
                         image_w = img.shape[1]
                         new_image = img.copy()
-                        img_name = item['data_samples'][i].img_in_vid_ids
+                        img_name = item['data_samples'].img_in_vid_ids[i]
                         previous_locations = []
                         previous_bboxes = []
                         text_offset = 10

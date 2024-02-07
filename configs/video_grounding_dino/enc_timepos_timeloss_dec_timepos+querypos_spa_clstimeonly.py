@@ -3,6 +3,7 @@ _base_ = [
 ]
 # pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
 load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_dino/v3det_1/epoch_30.pth'
+# load_from = '/mnt/data/mmperc/chenyicheng/code/mmdetection/work_dirs/mixed_o365_goldg_grit_all_v3det_share124_rec/epoch_13.pth'
 lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
@@ -19,9 +20,9 @@ model = dict(
         type='VideoDataPreprocessor',
         do_round=False,
         div_vid=0,
+        bgr_to_rgb=True,
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225],
-        bgr_to_rgb=True,
     ),
     language_model=dict(
         type='BertModel',
@@ -91,7 +92,7 @@ model = dict(
             # time query type
             time_query_type='tq',
             # query self attention layer
-            use_self_attn=False,
+            use_self_attn=True,
             self_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
             # cross attention layer query to text
             cross_attn_text_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
@@ -112,9 +113,11 @@ model = dict(
         ),  # 2.0 in DeformDETR
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
+        use_enc_sted=True,
         sted_loss_weight=10.0,
         time_only=False,
         exclude_cls=False,
+        exclude_box=True,
     ),
     use_dn=False,
     dn_cfg=dict(  # TODO: Move to model.train_cfg ?
@@ -134,4 +137,17 @@ model = dict(
         )
     ),
     test_cfg=dict(max_per_img=1),
+)
+optim_wrapper = dict(
+    _delete_=True,
+    type='OptimWrapper',
+    optimizer=dict(type='AdamW', lr=0.00002, weight_decay=0.0001),  # bs=16 0.0001
+    clip_grad=dict(max_norm=0.1, norm_type=2),
+    paramwise_cfg=dict(
+        custom_keys={
+            'absolute_pos_embed': dict(decay_mult=0.0),
+            'backbone': dict(lr_mult=0.1),
+            'language_model': dict(lr_mult=0.1),
+        }
+    ),
 )

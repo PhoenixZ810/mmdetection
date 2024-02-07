@@ -57,11 +57,6 @@ model = dict(
     encoder=dict(
         num_layers=6,
         num_cp=6,
-        # # visual temporal self-attention config
-        # time_attn_layer_cfg=dict(
-        #     self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
-        #     ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
-        # ),
         # visual layer config, MultiScaleDeformableAttention
         layer_cfg=dict(
             self_attn_cfg=dict(embed_dims=256, num_levels=4, dropout=0.0, im2col_step=1),

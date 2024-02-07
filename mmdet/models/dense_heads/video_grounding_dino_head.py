@@ -33,6 +33,7 @@ class VideoGroundingHead(GroundingDINOHead):
         sted_loss_weight=5.0,
         time_only=False,
         exclude_cls=False,
+        exclude_box = False,
         **kwargs,
     ):
         self.use_sted = use_sted
@@ -41,6 +42,8 @@ class VideoGroundingHead(GroundingDINOHead):
         self.sted_loss_weight = sted_loss_weight
         self.time_only = time_only
         self.exclude_cls = exclude_cls
+        self.exclude_box = exclude_box
+
         super().__init__(**kwargs)
 
     def _init_layers(self) -> None:
@@ -424,6 +427,11 @@ class VideoGroundingHead(GroundingDINOHead):
         if self.time_only:
             for ls in loss_dict:
                 if ls != 'loss_sted':
+                    loss_dict[ls] = loss_dict[ls] * 0
+        '''exclude box loss'''
+        if self.exclude_box:
+            for ls in loss_dict:
+                if 'sted' not in ls and 'cls' not in ls:
                     loss_dict[ls] = loss_dict[ls] * 0
         return loss_dict
 

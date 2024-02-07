@@ -139,17 +139,17 @@ model = dict(
 dataset_type = 'ODVGDataset'
 data_root = 'data/'
 
-# scales = [96, 128]
-# max_size = 213
-# resizes = [80, 100, 120]
-# crop = 64
-# test_size = [128]
+scales = [96, 128]
+max_size = 213
+resizes = [80, 100, 120]
+crop = 64
+test_size = [128]
 
-scales = [192, 224, 256, 288, 320]
-max_size = 533
-resizes = [200, 240, 280]
-crop = 160
-test_size = [320]
+# scales = [192, 224, 256, 288, 320]
+# max_size = 533
+# resizes = [200, 240, 280]
+# crop = 160
+# test_size = [320]
 
 video_test_pipeline = [
     dict(
@@ -194,8 +194,8 @@ val_dataloader = dict(
     dataset=dict(
         type='VideoModulatedSTGrounding',
         data_root=data_root,
-        ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
-        # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
+        # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+        ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
         data_prefix=dict(img='VidSTG/video/'),
         test_mode=True,
         video_max_len=100,
@@ -209,8 +209,8 @@ test_dataloader = val_dataloader
 
 val_evaluator = dict(
     type='VidstgMetric',
-    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
-    # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
+    # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
     metric='bbox',
     format_only=False,
     backend_args=None,
