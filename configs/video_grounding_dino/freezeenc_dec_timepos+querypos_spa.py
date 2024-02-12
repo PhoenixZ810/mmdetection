@@ -354,7 +354,7 @@ data_root = 'data/'
 vidstg_video_dataset = dict(
     type='VidVideoModulatedSTGrounding',
     data_root=data_root,
-    # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+    # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/vistvg_val_debug.json',
     ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/train_filter.json',
     data_prefix=dict(img='VidSTG/video/'),
     filter_cfg=dict(filter_empty_gt=False),
@@ -390,7 +390,7 @@ val_dataloader = dict(
     dataset=dict(
         type='HCVideoModulatedSTGrounding',
         data_root=data_root,
-        # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+        # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/hcstvg_val_debug.json',
         ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/data/HC-STVG_v1/test_proc.json',
         data_prefix=dict(img='HC-STVG_v1/video/'),
         test_mode=True,
@@ -408,7 +408,7 @@ val_dataloader = dict(
 #     dataset=dict(
 #         type='VidVideoModulatedSTGrounding',
 #         data_root=data_root,
-#         # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+#         # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/vistvg_val_debug.json',
 #         ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
 #         data_prefix=dict(img='VidSTG/video/'),
 #         test_mode=True,
@@ -423,7 +423,7 @@ test_dataloader = val_dataloader
 
 # val_evaluator = dict(
 #     type='VideoMetric',
-#     # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+#     # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/vistvg_val_debug.json',
 #     ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
 #     metric='bbox',
 #     format_only=False,
@@ -434,7 +434,7 @@ test_dataloader = val_dataloader
 # )
 val_evaluator = dict(
     type='VideoMetric',
-    # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
+    # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/hcstvg_val_debug.json',
     ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/data/HC-STVG_v1/test_proc.json',
     metric='bbox',
     format_only=False,

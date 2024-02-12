@@ -54,7 +54,7 @@ class VideoGroundingDINO(GroundingDINO):
             self.encoder.requires_grad_(False)
         if self.use_time_embed:
             self.time_embed = TimeEmbeddingSine(max_len=self.max_frames, d_model=self.embed_dims)
-        print(self)
+        # print(self)
 
     def _init_layers(self) -> None:
         """Initialize layers except for backbone, neck and bbox_head."""

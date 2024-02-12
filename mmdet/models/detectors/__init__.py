@@ -59,6 +59,7 @@ from .yolo import YOLOV3
 from .yolof import YOLOF
 from .yolox import YOLOX
 from .video_grounding_dino import VideoGroundingDINO
+from .video_STCAT_grounding_dino import VideoSTCATGroundingDINO
 
 __all__ = [
     'ATSS', 'BaseDetector', 'SingleStageDetector', 'TwoStageDetector', 'RPN',
@@ -72,5 +73,5 @@ __all__ = [
     'MaskFormer', 'DDOD', 'Mask2Former', 'SemiBaseDetector', 'SoftTeacher',
     'RTMDet', 'Detectron2Wrapper', 'CrowdDet', 'CondInst', 'BoxInst',
     'DetectionTransformer', 'ConditionalDETR', 'DINO', 'DABDETR', 'GLIP',
-    'DDQDETR', 'GroundingDINO', 'VideoGroundingDINO'
+    'DDQDETR', 'GroundingDINO', 'VideoGroundingDINO', 'VideoSTCATGroundingDINO'
 ]

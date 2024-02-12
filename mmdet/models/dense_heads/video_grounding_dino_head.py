@@ -31,6 +31,7 @@ class VideoGroundingHead(GroundingDINOHead):
         use_enc_sted=False,
         sigma=1,
         sted_loss_weight=5.0,
+        enc_sted_loss_weight=None,
         time_only=False,
         exclude_cls=False,
         exclude_box = False,
@@ -40,6 +41,10 @@ class VideoGroundingHead(GroundingDINOHead):
         self.use_enc_sted = use_enc_sted
         self.sigma = sigma
         self.sted_loss_weight = sted_loss_weight
+        if enc_sted_loss_weight is not None:
+            self.enc_sted_loss_weight = enc_sted_loss_weight
+        else:
+            self.enc_sted_loss_weight = sted_loss_weight
         self.time_only = time_only
         self.exclude_cls = exclude_cls
         self.exclude_box = exclude_box
@@ -395,7 +400,7 @@ class VideoGroundingHead(GroundingDINOHead):
                 positive_map = None
             loss_dict.update(self.loss_sted(outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
             if self.use_enc_sted:
-                loss_enc=(self.loss_sted(enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
+                loss_enc=(self.loss_sted(enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask, enc_flag=True))
                 loss_dict['enc_loss_sted'] = loss_enc['loss_sted']
 
         if all_layers_denoising_cls_scores is not None and use_dn:
@@ -435,7 +440,7 @@ class VideoGroundingHead(GroundingDINOHead):
                     loss_dict[ls] = loss_dict[ls] * 0
         return loss_dict
 
-    def loss_sted(self, outputs, num_boxes, inter_idx, positive_map, time_mask=None):
+    def loss_sted(self, outputs, num_boxes, inter_idx, positive_map, time_mask=None, enc_flag=False):
         """Compute the losses related to the start & end prediction, a KL divergence loss
         targets dicts must contain the key "pred_sted" containing a tensor of logits of dim [T, 2]
         """
@@ -471,7 +476,10 @@ class VideoGroundingHead(GroundingDINOHead):
         loss_end = loss_end * time_mask  # do not count padded values in the loss
 
         loss_sted = loss_start + loss_end
-        losses["loss_sted"] = loss_sted.mean() * self.sted_loss_weight
+        if enc_flag:
+            losses["loss_sted"] = loss_sted.mean() * self.enc_sted_loss_weight
+        else:
+            losses["loss_sted"] = loss_sted.mean() * self.sted_loss_weight
 
         return losses
 
