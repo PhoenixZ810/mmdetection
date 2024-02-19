@@ -8,6 +8,9 @@ import torch
 from mmengine.model import BaseModule
 from torch import Tensor, nn
 
+from mmcv.ops import MultiScaleDeformableAttention
+from mmcv.cnn.bricks.transformer import FFN, MultiheadAttention
+
 from .grounding_dino_layers import (
     GroundingDinoTransformerEncoder,
     GroundingDinoTransformerDecoder,
@@ -25,15 +28,16 @@ except Exception:
 class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
     """Transformer decoder of VideoDINO."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, use_weight_loss=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.use_weight_loss = use_weight_loss
 
     def _init_layers(self) -> None:
         """Initialize decoder layers."""
         self.layers = ModuleList(
             [VideoGroundingDinoTransformerDecoderLayer(**self.layer_cfg) for _ in range(self.num_layers)]
         )
-        self.temp_layer = [TimeDecoderLayer() for _ in range(self.num_layers)]
+        self.temp_layer = ModuleList([TimeDecoderLayer() for _ in range(self.num_layers)])
         self.embed_dims = self.layers[0].embed_dims
         if self.post_norm_cfg is not None:
             raise ValueError('There is not post_norm in ' f'{self._get_name()}')
@@ -97,6 +101,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
         """
         intermediate = []
         intermediate_reference_points = [reference_points]
+        intermediate_weights = []
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 reference_points_input = (
@@ -122,19 +127,19 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                 time_embed=time_embed,
                 **kwargs,
             )
-            time_query = self.temp_layer[lid](
-                tgt=time_query,
-                query_pos=query_pos,
-                value=value,
-                key_padding_mask=key_padding_mask,
-                self_attn_mask=self_attn_mask,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                valid_ratios=valid_ratios,
-                reference_points=reference_points_input,
-                time_embed=time_embed,
-                **kwargs,
-            )
+            if time_query is not None:
+                time_query, weights = self.temp_layer[lid](
+                    tgt=time_query,
+                    memory=value,
+                    query_pos=query_pos,
+                    query_time_pos=time_embed,
+                    self_attn_mask=self_attn_mask,
+                    spatial_shapes=spatial_shapes,
+                    level_start_index=level_start_index,
+                    valid_ratios=valid_ratios,
+                    reference_points=reference_points_input,
+                    **kwargs,
+                )
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](query)
@@ -148,14 +153,32 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                 intermediate_reference_points.append(new_reference_points)
                 # NOTE this is for the "Look Forward Twice" module,
                 # in the DeformDETR, reference_points was appended.
-
+            if self.use_weight_loss:
+                intermediate_weights.append(weights)
+        # if time_query is not None:
+        #     if self.return_intermediate:
+        #         return torch.stack(intermediate), torch.stack(intermediate_reference_points), time_query
+        #     return query, reference_points, time_query
+        # else:
+        #     if self.return_intermediate:
+        #         return torch.stack(intermediate), torch.stack(intermediate_reference_points)
+        #     return query, reference_points
         if self.return_intermediate:
-            return torch.stack(intermediate), torch.stack(intermediate_reference_points)
+            if self.use_weight_loss:
+                return (
+                    torch.stack(intermediate),
+                    torch.stack(intermediate_reference_points),
+                    time_query,
+                    torch.stack(intermediate_weights),
+                )
+            else:
+                return torch.stack(intermediate), torch.stack(intermediate_reference_points), time_query, []
+        if self.use_weight_loss:
+            return query, reference_points, time_query, weights.unsqueeze(0)
+        else:
+            return query, reference_points, time_query, []
 
-        return query, reference_points
-
-
-class TimeDecoderLayer(nn.Module):
+class TimeDecoderLayer(BaseModule):
     def __init__(
         self,
         d_model=256,
@@ -168,7 +191,8 @@ class TimeDecoderLayer(nn.Module):
         super().__init__()
 
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.cross_attn_image = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        # self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.cross_attn_image = MultiScaleDeformableAttention(d_model, nhead, dropout=dropout)
 
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -201,6 +225,7 @@ class TimeDecoderLayer(nn.Module):
         query_pos: Optional[Tensor] = None,
         query_time_pos: Optional[Tensor] = None,
         durations=None,
+        **kwargs
     ):
 
         q = k = self.with_pos_embed(tgt, query_pos + query_time_pos)
@@ -218,7 +243,9 @@ class TimeDecoderLayer(nn.Module):
         tgt = self.norm1(tgt)
 
         t, b, c = tgt.shape
-        n_tokens, bs, f = memory.shape
+        durations = [t]
+        # n_tokens, bs, f = memory.shape
+        bs, n_tokens, f = memory.shape
 
         # extract the actual video length query
         clip_start = 0
@@ -235,12 +262,15 @@ class TimeDecoderLayer(nn.Module):
 
         assert clip_start == bs
 
-        tgt2, _ = self.cross_attn_image(
-            query=self.with_pos_embed(tgt_cross, query_pos_cross),
-            key=self.with_pos_embed(memory, pos),
+        memory = memory.transpose(0, 1)
+        tgt2 = self.cross_attn_image(
+            query=tgt_cross,
+            key=None,
             value=memory,
+            query_pos=query_pos_cross,
             attn_mask=memory_mask,
             key_padding_mask=memory_key_padding_mask,
+            **kwargs,
         )
 
         # reshape to the batched query
@@ -255,14 +285,17 @@ class TimeDecoderLayer(nn.Module):
         tgt2 = tgt2_pad
         tgt2 = tgt2.view(b, t, f).transpose(0, 1)  # 1x(b*t)xf -> bxtxf -> txbxf
 
-        tgt = tgt + self.dropout3(tgt2)
-        tgt = self.norm3(tgt)
+        # tgt = tgt + self.dropout3(tgt2)
+        # tgt = self.norm3(tgt)
+        tgt = self.norm3(tgt2)
 
         # FFN
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout4(tgt2)
         tgt = self.norm4(tgt)
+
         return tgt, weights
+        # return tgt
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])

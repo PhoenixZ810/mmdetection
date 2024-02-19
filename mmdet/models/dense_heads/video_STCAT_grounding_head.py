@@ -1,51 +1,24 @@
-import copy
-import math
 from typing import Dict, List, Optional, Tuple, Union
 import sys
+import copy
 
 import torch
+from torch import Tensor
 import torch.nn as nn
 from mmcv.cnn import Linear
-from mmengine.structures import InstanceData
-from torch import Tensor
-import torch.nn.functional as F
 from mmdet.registry import MODELS
 from mmdet.structures import SampleList
-from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_xyxy_to_cxcywh
-from mmdet.utils import InstanceList, reduce_mean, OptInstanceList
 from ..layers import inverse_sigmoid
-from .atss_vlfusion_head import convert_grounding_to_cls_scores
-from .grounding_dino_head import GroundingDINOHead, ContrastiveEmbed
-from ..layers import MLP
+from .grounding_dino_head import ContrastiveEmbed
+from .video_grounding_dino_head import VideoGroundingHead
+from mmdet.utils import InstanceList, OptInstanceList
 from .deformable_detr_head import DeformableDETRHead
-
+from ..layers import MLP
 
 @MODELS.register_module()
-class VideoGroundingHead(GroundingDINOHead):
-    def __init__(
-        self,
-        use_sted=False,
-        use_enc_sted=False,
-        sigma=1,
-        sted_loss_weight=5.0,
-        enc_sted_loss_weight=None,
-        time_only=False,
-        exclude_cls=False,
-        exclude_box = False,
-        **kwargs,
-    ):
-        self.use_sted = use_sted
-        self.use_enc_sted = use_enc_sted
-        self.sigma = sigma
-        self.sted_loss_weight = sted_loss_weight
-        if enc_sted_loss_weight is not None:
-            self.enc_sted_loss_weight = enc_sted_loss_weight
-        else:
-            self.enc_sted_loss_weight = sted_loss_weight
-        self.time_only = time_only
-        self.exclude_cls = exclude_cls
-        self.exclude_box = exclude_box
-
+class VideoSTCATGroundingHead(VideoGroundingHead):
+    def __init__(self, use_actioness=False, **kwargs):
+        self.use_actioness = use_actioness
         super().__init__(**kwargs)
 
     def _init_layers(self) -> None:
@@ -77,6 +50,8 @@ class VideoGroundingHead(GroundingDINOHead):
                 self.sted_branch = nn.ModuleList(
                     [copy.deepcopy(self.sted_branch), copy.deepcopy(self.sted_branch)]
                 )
+        if self.use_actioness:
+            self.action_embed = MLP(self.embed_dims, self.embed_dims, 1, 2)
 
     def forward(
         self,
@@ -84,6 +59,7 @@ class VideoGroundingHead(GroundingDINOHead):
         references: List[Tensor],
         memory_text: Tensor,
         text_token_mask: Tensor,
+        output_time: Optional[Tensor] = None,
         use_dn=False,
     ) -> Tuple[Tensor]:
         """Forward function.
@@ -122,11 +98,16 @@ class VideoGroundingHead(GroundingDINOHead):
 
         if self.use_sted:
             if self.use_enc_sted:
-                outputs_sted = self.sted_branch[1](hidden_states[-1])
+                outputs_sted = self.sted_branch[1](output_time)
             else:
-                outputs_sted = self.sted_branch(hidden_states[-1])
+                outputs_sted = self.sted_branch(output_time)
         else:
             outputs_sted = None
+
+        if self.use_actioness:
+            outputs_actioness = self.action_embed(output_time)
+        else:
+            outputs_actioness = None
 
         for layer_id in range(hidden_states.shape[0]):
             reference = inverse_sigmoid(references[layer_id])
@@ -152,9 +133,7 @@ class VideoGroundingHead(GroundingDINOHead):
         all_layers_outputs_classes = torch.stack(all_layers_outputs_classes)
         all_layers_outputs_coords = torch.stack(all_layers_outputs_coords)
 
-        return all_layers_outputs_classes, all_layers_outputs_coords, outputs_sted
-        # tup = ()
-        # return (outputs_sted,)
+        return all_layers_outputs_classes, all_layers_outputs_coords, outputs_sted,outputs_actioness
 
     def loss(
         self,
@@ -167,6 +146,8 @@ class VideoGroundingHead(GroundingDINOHead):
         batch_data_samples: SampleList,
         use_dn: bool,
         dn_meta: Dict[str, int],
+        output_time: Optional[Tensor] = None,
+        weights: Optional[List[Tensor]] = [],
         enc_outputs_sted=None,
     ) -> dict:
         """Perform forward propagation and loss calculation of the detection
@@ -209,7 +190,7 @@ class VideoGroundingHead(GroundingDINOHead):
             batch_img_metas.append(data_sample.metainfo)
             batch_gt_instances.append(data_sample.gt_instances)
 
-        outs = self(hidden_states, references, memory_text, text_token_mask)
+        outs = self(hidden_states, references, memory_text, text_token_mask, output_time=output_time)
         self.text_masks = text_token_mask
 
         durations = batch_data_samples[0].durations
@@ -226,6 +207,7 @@ class VideoGroundingHead(GroundingDINOHead):
             time_mask = None
 
         loss_inputs = outs + (
+            weights[-1],
             enc_outputs_class,
             enc_outputs_coord,
             enc_outputs_sted,
@@ -235,7 +217,7 @@ class VideoGroundingHead(GroundingDINOHead):
             dn_meta,
             time_mask,
             durations,
-            inter_idx
+            inter_idx,
         )
         losses = self.loss_by_feat(*loss_inputs)
         return losses
@@ -245,6 +227,8 @@ class VideoGroundingHead(GroundingDINOHead):
         all_layers_cls_scores: Tensor,
         all_layers_bbox_preds: Tensor,
         outputs_sted,
+        outputs_actioness,
+        weights: Optional[List[Tensor]],
         enc_cls_scores: Tensor,
         enc_bbox_preds: Tensor,
         enc_outputs_sted: Tensor,
@@ -397,9 +381,17 @@ class VideoGroundingHead(GroundingDINOHead):
                 positive_map = None
             loss_dict.update(self.loss_sted(outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
             if self.use_enc_sted:
-                loss_enc=(self.loss_sted(enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask, enc_flag=True))
+                loss_enc = self.loss_sted(
+                    enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask, enc_flag=True
+                )
                 loss_dict['enc_loss_sted'] = loss_enc['loss_sted']
 
+        if weights is not []:
+            loss_dict.update(
+                self.loss_guided_attn(weights, positive_map, time_mask)
+            )
+        if self.use_actioness:
+            loss_dict.update(self.loss_actioness(outputs_actioness, batch_gt_instances, durations, time_mask))
         if all_layers_denoising_cls_scores is not None and use_dn:
             # calculate denoising loss from all decoder layers
             dn_losses_cls, dn_losses_bbox, dn_losses_iou = self.loss_dn(
@@ -437,49 +429,6 @@ class VideoGroundingHead(GroundingDINOHead):
                     loss_dict[ls] = loss_dict[ls] * 0
         return loss_dict
 
-    def loss_sted(self, outputs, num_boxes, inter_idx, positive_map, time_mask=None, enc_flag=False):
-        """Compute the losses related to the start & end prediction, a KL divergence loss
-        targets dicts must contain the key "pred_sted" containing a tensor of logits of dim [T, 2]
-        """
-        # assert "pred_sted" in outputs
-        sted = outputs.transpose(0, 1)  # [1, T, 2]
-        losses = {}
-
-        target_start = torch.tensor([x[0] for x in inter_idx], dtype=torch.long).to(sted.device)
-        target_end = torch.tensor([x[1] for x in inter_idx], dtype=torch.long).to(sted.device)
-        sted = sted.masked_fill(
-            ~time_mask[:, :, None], -1e32
-        )  # put very low probability on the padded positions before softmax
-        eps = 1e-6  # avoid log(0) and division by 0
-
-        sigma = self.sigma
-
-        start_distrib = (
-            -((torch.arange(sted.shape[1])[None, :].to(sted.device) - target_start[:, None]) ** 2)
-            / (2 * sigma**2)
-        ).exp()  # gaussian target, ground-truth time distribution
-        start_distrib = F.normalize(start_distrib + eps, p=1, dim=1)
-        pred_start_prob = (sted[:, :, 0]).softmax(1)  # 预测每一帧是开始帧的概率
-        loss_start = pred_start_prob * ((pred_start_prob + eps) / start_distrib).log()  # KL div loss
-        loss_start = loss_start * time_mask  # not count padded values in the loss
-
-        end_distrib = (
-            -((torch.arange(sted.shape[1])[None, :].to(sted.device) - target_end[:, None]) ** 2)
-            / (2 * sigma**2)
-        ).exp()  # gaussian target
-        end_distrib = F.normalize(end_distrib + eps, p=1, dim=1)
-        pred_end_prob = (sted[:, :, 1]).softmax(1)
-        loss_end = pred_end_prob * ((pred_end_prob + eps) / end_distrib).log()  # KL div loss
-        loss_end = loss_end * time_mask  # do not count padded values in the loss
-
-        loss_sted = loss_start + loss_end
-        if enc_flag:
-            losses["loss_sted"] = loss_sted.mean() * self.enc_sted_loss_weight
-        else:
-            losses["loss_sted"] = loss_sted.mean() * self.sted_loss_weight
-
-        return losses
-
     def predict(
         self,
         hidden_states: Tensor,
@@ -487,6 +436,8 @@ class VideoGroundingHead(GroundingDINOHead):
         memory_text: Tensor,
         text_token_mask: Tensor,
         batch_data_samples: SampleList,
+        output_time: Optional[Tensor] = None,
+        weights: Optional[List[Tensor]] = [],
         rescale: bool = True,
     ) -> InstanceList:
         """Perform forward propagation and loss calculation of the detection
@@ -522,7 +473,7 @@ class VideoGroundingHead(GroundingDINOHead):
         batch_img_metas = [data_samples.metainfo for data_samples in batch_data_samples]
         batch_token_positive_maps = [data_samples.token_positive_map for data_samples in batch_data_samples]
 
-        outs = self(hidden_states, references, memory_text, text_token_mask)
+        outs = self(hidden_states, references, memory_text, text_token_mask, output_time=output_time)
 
         predictions = self.predict_by_feat(
             *outs,
@@ -532,141 +483,40 @@ class VideoGroundingHead(GroundingDINOHead):
         )
         return predictions
 
-    def predict_by_feat(
-        self,
-        all_layers_cls_scores: Tensor,
-        all_layers_bbox_preds: Tensor,
-        outputs_sted,
-        batch_img_metas: List[Dict],
-        batch_token_positive_maps: Optional[List[dict]] = None,
-        rescale: bool = False,
-    ) -> InstanceList:
-        """Transform a batch of output features extracted from the head into
-        bbox results.
-
-        Args:
-            all_layers_cls_scores (Tensor):  Classification scores of all
-                decoder layers, has shape (num_decoder_layers, bs, num_queries,
-                cls_out_channels).
-            all_layers_bbox_preds (Tensor): Regression outputs of all decoder
-                layers. Each is a 4D-tensor with normalized coordinate format
-                (cx, cy, w, h) and shape (num_decoder_layers, bs, num_queries,
-                4) with the last dimension arranged as (cx, cy, w, h).
-            batch_img_metas (List[Dict]): _description_
-            batch_token_positive_maps (list[dict], Optional): Batch token
-                positive map. Defaults to None.
-            rescale (bool): If True, return boxes in original image space.
-                Defaults to False.
-
-        Returns:
-            list[:obj:`InstanceData`]: Object detection results of each image
-            after the post process. Each item usually contains following keys.
-
-                - scores (Tensor): Classification scores, has a shape
-                  (num_instance, )
-                - labels (Tensor): Labels of bboxes, has a shape
-                  (num_instances, ).
-                - bboxes (Tensor): Has a shape (num_instances, 4),
-                  the last dimension 4 arrange as (x1, y1, x2, y2).
+    def loss_guided_attn(self, weights, positive_map, time_mask=None):
+        """Compute guided attention loss
+        targets "weights" contains a tensor of attention matrices of dim [B, T, T]
         """
-        cls_scores = all_layers_cls_scores[-1]
-        bbox_preds = all_layers_bbox_preds[-1]
-        model_outputs_sted = outputs_sted
-        result_list = []
-        for img_id in range(len(batch_img_metas)):
-            cls_score = cls_scores[img_id]
-            bbox_pred = bbox_preds[img_id]
-            outputs_sted = model_outputs_sted[img_id]
-            img_meta = batch_img_metas[img_id]
-            token_positive_maps = batch_token_positive_maps[img_id]
-            results = self._predict_by_feat_single(
-                cls_score, bbox_pred, outputs_sted, token_positive_maps, img_meta, rescale
-            )
-            result_list.append(results)
-        return result_list
-        # if self.use_sted:
-        #     num_boxes = len(keep)
-        #     inter_idx = [batch_img_metas[0]['inter_idx']]
-        #     if inter_idx is not None and time_mask is not None:
-        #         # set frames with box for each batchsize(duration) as positive
-        #         # construct a map such that positive_map[k, i] = True iff num_frame i lies inside the annotated moment k
-        #         positive_map = torch.zeros(time_mask.shape, dtype=torch.bool)
-        #         for k, idx in enumerate(inter_idx):
-        #             if idx[0] < 0:  # empty intersection
-        #                 continue
-        #             positive_map[k][idx[0] : idx[1] + 1].fill_(True)
+        # weights = outputs["weights"]  # BxTxT
 
-        #         positive_map = positive_map.to(time_mask.device)
-        #     elif time_mask is None:
-        #         positive_map = None
-        #     loss_dict.update(self.loss_sted(outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
+        positive_map = positive_map + (~time_mask)  # the padded positions also have to be taken out
+        eps = 1e-6  # avoid log(0) and division by 0
 
-    def _predict_by_feat_single(
-        self,
-        cls_score: Tensor,
-        bbox_pred: Tensor,
-        outputs_sted: Tensor,
-        token_positive_maps: dict,
-        img_meta: dict,
-        rescale: bool = True,
-    ) -> InstanceData:
-        """Transform a single image's features extracted from the head into
-        bbox results.
+        loss = -(1 - weights + eps).log()
+        loss = loss.masked_fill(positive_map[:, :, None], 0)
+        nb_neg = (~positive_map).sum(1) + eps
+        loss = loss.sum(2) / nb_neg[:, None]  # sum on the column
+        loss = loss.sum(1)  # mean on the line normalized by the number of negatives
+        loss = loss.mean()  # mean on the batch
 
-        Args:
-            cls_score (Tensor): Box score logits from the last decoder layer
-                for each image. Shape [num_queries, cls_out_channels].
-            bbox_pred (Tensor): Sigmoid outputs from the last decoder layer
-                for each image, with coordinate format (cx, cy, w, h) and
-                shape [num_queries, 4].
-            token_positive_maps (dict): Token positive map.
-            img_meta (dict): Image meta info.
-            rescale (bool, optional): If True, return boxes in original image
-                space. Default True.
+        losses = {"loss_guided_attn": loss}
+        return losses
 
-        Returns:
-            :obj:`InstanceData`: Detection results of each image
-            after the post process.
-            Each item usually contains following keys.
+    def loss_actioness(self, pred_actioness, targets, gt_temp_bound, time_mask=None):
+        # assert "pred_actioness" in outputs
+        losses = {}
+        pred_actioness = pred_actioness.squeeze(-1)
+        target_actioness = torch.stack([target["actioness"] for target in targets], dim=0).float()
+        weight = torch.full(pred_actioness.shape, self.eos_coef, device=pred_actioness.device)
 
-                - scores (Tensor): Classification scores, has a shape
-                  (num_instance, )
-                - labels (Tensor): Labels of bboxes, has a shape
-                  (num_instances, ).
-                - bboxes (Tensor): Has a shape (num_instances, 4),
-                  the last dimension 4 arrange as (x1, y1, x2, y2).
-        """
-        assert len(cls_score) == len(bbox_pred)  # num_queries
-        max_per_img = self.test_cfg.get('max_per_img', len(cls_score))
-        img_shape = img_meta['img_shape']
+        for i_b in range(len(weight)):
+            temp_bound = gt_temp_bound[i_b]
+            weight[i_b][temp_bound[0] : temp_bound[1] + 1] = 1
 
-        if token_positive_maps is not None:
-            cls_score = convert_grounding_to_cls_scores(
-                logits=cls_score.sigmoid()[None], positive_maps=[token_positive_maps]
-            )[0]
-            scores, indexes = cls_score.view(-1).topk(max_per_img)
-            num_classes = cls_score.shape[-1]
-            det_labels = indexes % num_classes
-            bbox_index = indexes // num_classes
-            bbox_pred = bbox_pred[bbox_index]
-        else:
-            cls_score = cls_score.sigmoid()
-            scores, _ = cls_score.max(-1)
-            scores, indexes = scores.topk(max_per_img)
-            bbox_pred = bbox_pred[indexes]
-            det_labels = scores.new_zeros(scores.shape, dtype=torch.long)
+        loss_actioness = F.binary_cross_entropy_with_logits(
+            pred_actioness, target_actioness, weight=weight, reduction='none'
+        )
 
-        det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)
-        det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * img_shape[1]
-        det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * img_shape[0]
-        det_bboxes[:, 0::2].clamp_(min=0, max=img_shape[1])
-        det_bboxes[:, 1::2].clamp_(min=0, max=img_shape[0])
-        if rescale:
-            assert img_meta.get('scale_factor') is not None
-            det_bboxes /= det_bboxes.new_tensor(img_meta['scale_factor']).repeat((1, 2))
-        results = InstanceData()
-        results.bboxes = det_bboxes
-        results.scores = scores
-        results.labels = det_labels
-        results.sted = outputs_sted
-        return results
+        loss_actioness = loss_actioness * time_mask
+        losses["loss_actioness"] = loss_actioness.mean()
+        return losses

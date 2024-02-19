@@ -114,7 +114,7 @@ model = dict(
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
         use_enc_sted=True,
-        sted_loss_weight=20.0,
+        sted_loss_weight=10.0,
         # enc_sted_loss_weight=10.0,
         time_only=False,
         exclude_cls=False,
@@ -155,18 +155,23 @@ optim_wrapper = dict(
 max_epochs = 30
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=500),
-    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[19, 24], gamma=0.1),
+    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[24], gamma=0.1),
 ]
 
 # dataset settings
-frames_num = 100
+frames_num = 50
 
-scales = [96, 128]
-max_size = 213
-resizes = [80, 100, 120]
-crop = 64
-test_size = [128]
+# scales = [96, 128]
+# max_size = 213
+# resizes = [80, 100, 120]
+# crop = 64
+# test_size = [128]
 
+scales = [128, 160, 192, 224]
+max_size = 373
+resizes = [100, 150, 200]
+crop = 96
+test_size = [224]
 video_train_pipeline = [
     dict(
         type='mp4_to_image',
@@ -293,3 +298,16 @@ val_dataloader = dict(
     ),
 )
 test_dataloader = val_dataloader
+
+val_evaluator = dict(
+    type='VideoMetric',
+    # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/vistvg_val_debug.json',
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/VidSTG/annotations/val.json',
+    metric='bbox',
+    format_only=False,
+    backend_args=None,
+    use_sted=True,
+    tmp_loc=True,
+    postprocessors='vidstg',
+)
+test_evaluator = val_evaluator

@@ -15,8 +15,6 @@ from mmdet.structures.bbox import bbox_xyxy_to_cxcywh
 from mmdet.models.utils.vlfuse_helper import SingleScaleBiAttentionBlock
 from mmdet.utils import ConfigType, OptConfigType
 from .deformable_detr_layers import (
-    DeformableDetrTransformerDecoderLayer,
-    DeformableDetrTransformerEncoder,
     DeformableDetrTransformerEncoderLayer,
 )
 from .detr_layers import DetrTransformerEncoderLayer
@@ -416,10 +414,10 @@ class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderL
         # cross attention between query and image
         query = self.cross_attn(
             query=query,
-            key=key,
-            value=value,
+            key=key, # None
+            value=value, # image memory
             query_pos=query_pos,
-            key_pos=key_pos,
+            key_pos=key_pos, # None
             attn_mask=cross_attn_mask,
             key_padding_mask=key_padding_mask,
             **kwargs,

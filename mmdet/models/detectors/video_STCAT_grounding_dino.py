@@ -99,8 +99,9 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         query = self.query_embedding.weight[:, None, :]
         query = query.repeat(1, bs, 1).transpose(0, 1)
 
-        time_query = self.time_query.weight[None, :, :]
-        time_query = time_query.repeat(1, bs, 1).transpose(0, 1)
+        if self.use_time_embed:
+            time_query = self.time_query.weight[None, :, :]
+            time_query = time_query.repeat(1, bs, 1).transpose(0, 1).to(query.device)
 
         # if self.training and self.use_dn:
         #     dn_label_query, dn_bbox_query, dn_mask, dn_meta = self.dn_query_generator(batch_data_samples)
@@ -225,21 +226,59 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
             `hidden_states` of the decoder output and `references` including
             the initial and intermediate reference_points.
         """
-
-        inter_states, references = self.decoder(
-            query=query,
-            tiime_query=time_query,
-            value=memory,
-            key_padding_mask=memory_mask,
-            self_attn_mask=dn_mask,
-            reference_points=reference_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-            valid_ratios=valid_ratios,
-            reg_branches=self.bbox_head.reg_branches,
-            time_embed=time_embed,
-            **kwargs,
+        # if self.use_time_embed:
+        #     inter_states, references, output_time, weights = self.decoder(
+        #         query=query,
+        #         time_query=time_query,
+        #         value=memory,
+        #         key_padding_mask=memory_mask,
+        #         self_attn_mask=dn_mask,
+        #         reference_points=reference_points,
+        #         spatial_shapes=spatial_shapes,
+        #         level_start_index=level_start_index,
+        #         valid_ratios=valid_ratios,
+        #         reg_branches=self.bbox_head.reg_branches,
+        #         time_embed=time_embed,
+        #         **kwargs,
+        #     )
+        #     decoder_outputs_dict = dict(
+        #         hidden_states=inter_states, references=list(references), output_time=output_time
+        #     )
+        # else:
+        #     inter_states, references = self.decoder(
+        #         query=query,
+        #         time_query=time_query,
+        #         value=memory,
+        #         key_padding_mask=memory_mask,
+        #         self_attn_mask=dn_mask,
+        #         reference_points=reference_points,
+        #         spatial_shapes=spatial_shapes,
+        #         level_start_index=level_start_index,
+        #         valid_ratios=valid_ratios,
+        #         reg_branches=self.bbox_head.reg_branches,
+        #         time_embed=time_embed,
+        #         **kwargs,
+        #     )
+        #     decoder_outputs_dict = dict(hidden_states=inter_states, references=list(references))
+        # return decoder_outputs_dict
+        inter_states, references, output_time, weights = self.decoder(
+                query=query,
+                time_query=time_query,
+                value=memory,
+                key_padding_mask=memory_mask,
+                self_attn_mask=dn_mask,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+                reg_branches=self.bbox_head.reg_branches,
+                time_embed=time_embed,
+                **kwargs,
+            )
+        decoder_outputs_dict = dict(
+            hidden_states=inter_states, references=list(references), output_time=output_time,weights=weights
         )
+        return decoder_outputs_dict
 
         # if len(query) == self.num_queries:
         #     # NOTE: This is to make sure label_embeding can be involved to
@@ -247,6 +286,3 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         #     # target in this GPU), otherwise, this will raise runtime error in
         #     # distributed training.
         #     inter_states[0] += self.dn_query_generator.label_embedding.weight[0, 0] * 0.0
-
-        decoder_outputs_dict = dict(hidden_states=inter_states, references=list(references))
-        return decoder_outputs_dict

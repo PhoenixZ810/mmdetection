@@ -86,6 +86,7 @@ model = dict(
     decoder=dict(
         num_layers=6,
         return_intermediate=True,
+        use_weight_loss=True,
         layer_cfg=dict(
             # query temporal self-attention layer
             time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
@@ -104,7 +105,7 @@ model = dict(
     ),
     positional_encoding=dict(num_feats=128, normalize=True, offset=0.0, temperature=20),
     bbox_head=dict(
-        type='VideoGroundingHead',
+        type='VideoSTCATGroundingHead',
         num_classes=256,
         sync_cls_avg_factor=True,
         contrastive_cfg=dict(max_text_len=256, log_scale='auto', bias=True),
@@ -114,6 +115,7 @@ model = dict(
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
         use_enc_sted=True,
+        use_actioness = True,
         sted_loss_weight=10.0,
         time_only=False,
         exclude_cls=False,
