@@ -126,7 +126,7 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         # add temporal encoding to init time queries
         if self.use_time_embed:
             time_embed = (
-                self.time_embed(bs).repeat(self.num_queries, b, 1).to(query.device)
+                self.time_embed(bs).repeat(b, 1, 1).to(query.device)
             )  # n_queries * t, b, 256
             decoder_inputs_dict = dict(
                 query=query,

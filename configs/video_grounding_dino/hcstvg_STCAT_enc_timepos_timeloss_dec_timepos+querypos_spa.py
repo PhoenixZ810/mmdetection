@@ -8,7 +8,7 @@ lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
     type='VideoSTCATGroundingDINO',
-    num_queries=1,
+    num_queries=300,
     with_box_refine=True,
     as_two_stage=True,
     use_time_embed=True,
@@ -86,12 +86,12 @@ model = dict(
     decoder=dict(
         num_layers=6,
         return_intermediate=True,
-        use_weight_loss=True,
+        use_weight_loss=False,
         layer_cfg=dict(
             # query temporal self-attention layer
             time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
             # time query type
-            time_query_type='tq',
+            time_query_type='t',
             # query self attention layer
             use_self_attn=True,
             self_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
@@ -115,7 +115,7 @@ model = dict(
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
         use_enc_sted=True,
-        use_actioness = True,
+        use_actioness = False,
         sted_loss_weight=10.0,
         time_only=False,
         exclude_cls=False,
@@ -153,14 +153,14 @@ optim_wrapper = dict(
     ),
 )
 
-max_epochs = 30
+max_epochs = 50
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=50),
     dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[24], gamma=0.1),
 ]
 
 # dataset settings
-frames_num = 50
+frames_num = 30
 
 # scales = [96, 128]
 # max_size = 213
@@ -173,6 +173,12 @@ max_size = 373
 resizes = [100, 150, 200]
 crop = 96
 test_size = [224]
+
+# scales = [192, 224, 256, 288, 320]
+# max_size = 533
+# resizes = [200, 240, 280]
+# crop = 160
+# test_size = [320]
 
 video_train_pipeline = [
     dict(

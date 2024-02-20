@@ -114,7 +114,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
             # video decode
             query_sine_embed = coordinate_to_encoding(reference_points_input[:, :, 0, :])
             query_pos = self.ref_point_head(query_sine_embed)
-            query = layer(
+            query,weights_spa = layer(
                 query,
                 query_pos=query_pos,
                 value=value,
@@ -172,7 +172,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                     torch.stack(intermediate_weights),
                 )
             else:
-                return torch.stack(intermediate), torch.stack(intermediate_reference_points), time_query, []
+                return torch.stack(intermediate), torch.stack(intermediate_reference_points), time_query, None
         if self.use_weight_loss:
             return query, reference_points, time_query, weights.unsqueeze(0)
         else:
@@ -192,7 +192,8 @@ class TimeDecoderLayer(BaseModule):
 
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         # self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.cross_attn_image = MultiScaleDeformableAttention(d_model, nhead, dropout=dropout)
+        # self.cross_attn_image = MultiScaleDeformableAttention(d_model, nhead, dropout=dropout)
+        self.cross_attn_image = MultiheadAttention(d_model, nhead, dropout=dropout)
 
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -228,8 +229,8 @@ class TimeDecoderLayer(BaseModule):
         **kwargs
     ):
 
-        q = k = self.with_pos_embed(tgt, query_pos + query_time_pos)
-
+        # q = k = self.with_pos_embed(tgt, query_pos + query_time_pos)
+        q = k = self.with_pos_embed(tgt, query_time_pos)
         # Temporal Self attention
         tgt2, weights = self.self_attn(
             q,
@@ -265,9 +266,10 @@ class TimeDecoderLayer(BaseModule):
         memory = memory.transpose(0, 1)
         tgt2 = self.cross_attn_image(
             query=tgt_cross,
-            key=None,
+            key=memory,
             value=memory,
-            query_pos=query_pos_cross,
+            # query_pos=query_pos_cross,
+            # key_pos = query_pos_cross,
             attn_mask=memory_mask,
             key_padding_mask=memory_key_padding_mask,
             **kwargs,
@@ -275,14 +277,14 @@ class TimeDecoderLayer(BaseModule):
 
         # reshape to the batched query
         clip_start = 0
-        tgt2_pad = torch.zeros(1, t * b, c).to(device)
+        # tgt2_pad = torch.zeros(1, t * b, c).to(device)
 
-        for i_b in range(b):
-            clip_length = durations[i_b]
-            tgt2_pad[0, i_b * t : i_b * t + clip_length] = tgt2[0, clip_start : clip_start + clip_length]
-            clip_start += clip_length
+        # for i_b in range(b):
+        #     clip_length = durations[i_b]
+        #     tgt2_pad[0, i_b * t : i_b * t + clip_length] = tgt2[0, clip_start : clip_start + clip_length]
+        #     clip_start += clip_length
 
-        tgt2 = tgt2_pad
+        # tgt2 = tgt2_pad
         tgt2 = tgt2.view(b, t, f).transpose(0, 1)  # 1x(b*t)xf -> bxtxf -> txbxf
 
         # tgt = tgt + self.dropout3(tgt2)

@@ -167,8 +167,9 @@ class VideoGroundingDinoTransformerEncoder(GroundingDinoTransformerEncoder):
 class VideoGroundingDinoTransformerDecoder(GroundingDinoTransformerDecoder):
     """Transformer decoder of VideoDINO."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, use_weight_loss=False, * args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.use_weight_loss = use_weight_loss
 
     def _init_layers(self) -> None:
         """Initialize decoder layers."""
@@ -237,6 +238,7 @@ class VideoGroundingDinoTransformerDecoder(GroundingDinoTransformerDecoder):
         """
         intermediate = []
         intermediate_reference_points = [reference_points]
+        intermediate_weights = []
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 reference_points_input = (
@@ -249,7 +251,7 @@ class VideoGroundingDinoTransformerDecoder(GroundingDinoTransformerDecoder):
             # video decode
             query_sine_embed = coordinate_to_encoding(reference_points_input[:, :, 0, :])
             query_pos = self.ref_point_head(query_sine_embed)
-            query = layer(
+            query, weights = layer(
                 query,
                 query_pos=query_pos,
                 value=value,
@@ -275,11 +277,18 @@ class VideoGroundingDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                 intermediate_reference_points.append(new_reference_points)
                 # NOTE this is for the "Look Forward Twice" module,
                 # in the DeformDETR, reference_points was appended.
+            if self.use_weight_loss:
+                intermediate_weights.append(weights)
 
         if self.return_intermediate:
-            return torch.stack(intermediate), torch.stack(intermediate_reference_points)
-
-        return query, reference_points
+            if self.use_weight_loss:
+                return torch.stack(intermediate), torch.stack(intermediate_reference_points), torch.stack(intermediate_weights)
+            else:
+                return torch.stack(intermediate), torch.stack(intermediate_reference_points), None
+        if self.use_weight_loss:
+            return query, reference_points, weights.unsqueeze(0)
+        else:
+            return query, reference_points, None
 
 
 class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderLayer):
@@ -294,6 +303,8 @@ class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderL
         if self.use_self_attn:
             self.self_attn = MultiheadAttention(**self.self_attn_cfg)
         if self.time_attn_cfg is not None:
+            if 'batch_first' not in self.time_attn_cfg:
+                self.time_attn_cfg['batch_first'] = True
             self.time_attn = MultiheadAttention(**self.time_attn_cfg)
         self.cross_attn_text = MultiheadAttention(**self.cross_attn_text_cfg)
         self.cross_attn = MultiScaleDeformableAttention(**self.cross_attn_cfg)
@@ -358,35 +369,41 @@ class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderL
         if time_embed is not None and self.time_attn_cfg is not None:
             # temporal_self_attention
             if self.time_query_type == 'tq':
-                query = self.time_attn(
+                query,weights = self.time_attn(
                     query=query.transpose(0, 1),
                     key=query.transpose(0, 1),
                     value=query.transpose(0, 1),
                     query_pos=query_pos.transpose(0, 1) + time_embed.transpose(0, 1),
                     key_pos=query_pos.transpose(0, 1) + time_embed.transpose(0, 1),
                     attn_mask=self_attn_mask,
+                    return_weight=True,
                     **kwargs,
-                ).transpose(0, 1)
+                )
+                query = query.transpose(0, 1)
             elif self.time_query_type == 'q':
-                query = self.time_attn(
+                query, weights = self.time_attn(
                     query=query.transpose(0, 1),
                     key=query.transpose(0, 1),
                     value=query.transpose(0, 1),
                     query_pos=query_pos.transpose(0, 1),
                     key_pos=query_pos.transpose(0, 1),
                     attn_mask=self_attn_mask,
+                    return_weight=True,
                     **kwargs,
-                ).transpose(0, 1)
+                )
+                query = query.transpose(0, 1)
             elif self.time_query_type == 't':
-                query = self.time_attn(
+                query, weights = self.time_attn(
                     query=query.transpose(0, 1),
                     key=query.transpose(0, 1),
                     value=query.transpose(0, 1),
                     query_pos=time_embed.transpose(0, 1),
                     key_pos=time_embed.transpose(0, 1),
                     attn_mask=self_attn_mask,
+                    return_weight=True,
                     **kwargs,
-                ).transpose(0, 1)
+                )
+                query = query.transpose(0, 1)
             query = self.norms[0](query)
 
         if self.use_self_attn:
@@ -426,4 +443,4 @@ class VideoGroundingDinoTransformerDecoderLayer(GroundingDinoTransformerDecoderL
         query = self.ffn(query)
         query = self.norms[4](query) if len(self.norms) == 5 else self.norms[3](query)
 
-        return query
+        return query, weights

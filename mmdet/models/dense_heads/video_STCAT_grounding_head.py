@@ -147,7 +147,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         use_dn: bool,
         dn_meta: Dict[str, int],
         output_time: Optional[Tensor] = None,
-        weights: Optional[List[Tensor]] = [],
+        weights: Optional[Tensor] = None,
         enc_outputs_sted=None,
     ) -> dict:
         """Perform forward propagation and loss calculation of the detection
@@ -205,9 +205,10 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
                 time_mask[i_dur, :duration] = True
         else:
             time_mask = None
-
+        if weights is not None:
+            weights = weights[-1]
         loss_inputs = outs + (
-            weights[-1],
+            weights,
             enc_outputs_class,
             enc_outputs_coord,
             enc_outputs_sted,
@@ -228,7 +229,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         all_layers_bbox_preds: Tensor,
         outputs_sted,
         outputs_actioness,
-        weights: Optional[List[Tensor]],
+        weights: Tensor,
         enc_cls_scores: Tensor,
         enc_bbox_preds: Tensor,
         enc_outputs_sted: Tensor,
@@ -386,7 +387,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
                 )
                 loss_dict['enc_loss_sted'] = loss_enc['loss_sted']
 
-        if weights is not []:
+        if weights is not None:
             loss_dict.update(
                 self.loss_guided_attn(weights, positive_map, time_mask)
             )
@@ -437,7 +438,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         text_token_mask: Tensor,
         batch_data_samples: SampleList,
         output_time: Optional[Tensor] = None,
-        weights: Optional[List[Tensor]] = [],
+        weights: Optional[Tensor] = None,
         rescale: bool = True,
     ) -> InstanceList:
         """Perform forward propagation and loss calculation of the detection
@@ -500,23 +501,4 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         loss = loss.mean()  # mean on the batch
 
         losses = {"loss_guided_attn": loss}
-        return losses
-
-    def loss_actioness(self, pred_actioness, targets, gt_temp_bound, time_mask=None):
-        # assert "pred_actioness" in outputs
-        losses = {}
-        pred_actioness = pred_actioness.squeeze(-1)
-        target_actioness = torch.stack([target["actioness"] for target in targets], dim=0).float()
-        weight = torch.full(pred_actioness.shape, self.eos_coef, device=pred_actioness.device)
-
-        for i_b in range(len(weight)):
-            temp_bound = gt_temp_bound[i_b]
-            weight[i_b][temp_bound[0] : temp_bound[1] + 1] = 1
-
-        loss_actioness = F.binary_cross_entropy_with_logits(
-            pred_actioness, target_actioness, weight=weight, reduction='none'
-        )
-
-        loss_actioness = loss_actioness * time_mask
-        losses["loss_actioness"] = loss_actioness.mean()
         return losses

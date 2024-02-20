@@ -167,6 +167,7 @@ class VideoGroundingHead(GroundingDINOHead):
         batch_data_samples: SampleList,
         use_dn: bool,
         dn_meta: Dict[str, int],
+        weights: Optional[Tensor] = None,
         enc_outputs_sted=None,
     ) -> dict:
         """Perform forward propagation and loss calculation of the detection
@@ -224,8 +225,10 @@ class VideoGroundingHead(GroundingDINOHead):
                 time_mask[i_dur, :duration] = True
         else:
             time_mask = None
-
+        if weights is not None:
+            weights = weights[-1]
         loss_inputs = outs + (
+            weights,
             enc_outputs_class,
             enc_outputs_coord,
             enc_outputs_sted,
@@ -235,7 +238,7 @@ class VideoGroundingHead(GroundingDINOHead):
             dn_meta,
             time_mask,
             durations,
-            inter_idx
+            inter_idx,
         )
         losses = self.loss_by_feat(*loss_inputs)
         return losses
@@ -245,6 +248,7 @@ class VideoGroundingHead(GroundingDINOHead):
         all_layers_cls_scores: Tensor,
         all_layers_bbox_preds: Tensor,
         outputs_sted,
+        weights: Tensor,
         enc_cls_scores: Tensor,
         enc_bbox_preds: Tensor,
         enc_outputs_sted: Tensor,
@@ -400,6 +404,9 @@ class VideoGroundingHead(GroundingDINOHead):
                 loss_enc=(self.loss_sted(enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask, enc_flag=True))
                 loss_dict['enc_loss_sted'] = loss_enc['loss_sted']
 
+        if weights is not None:
+            loss_dict.update(self.loss_guided_attn(weights, positive_map, time_mask))
+
         if all_layers_denoising_cls_scores is not None and use_dn:
             # calculate denoising loss from all decoder layers
             dn_losses_cls, dn_losses_bbox, dn_losses_iou = self.loss_dn(
@@ -480,6 +487,25 @@ class VideoGroundingHead(GroundingDINOHead):
 
         return losses
 
+    def loss_guided_attn(self, weights, positive_map, time_mask=None):
+        """Compute guided attention loss
+        targets "weights" contains a tensor of attention matrices of dim [B, T, T]
+        """
+        # weights = outputs["weights"]  # BxTxT
+
+        positive_map = positive_map + (~time_mask)  # the padded positions also have to be taken out
+        eps = 1e-6  # avoid log(0) and division by 0
+
+        loss = -(1 - weights + eps).log()
+        loss = loss.masked_fill(positive_map[:, :, None], 0)
+        nb_neg = (~positive_map).sum(1) + eps
+        loss = loss.sum(2) / nb_neg[:, None]  # sum on the column
+        loss = loss.sum(1)  # mean on the line normalized by the number of negatives
+        loss = loss.mean()  # mean on the batch
+
+        losses = {"loss_guided_attn": loss}
+        return losses
+
     def predict(
         self,
         hidden_states: Tensor,
@@ -487,6 +513,7 @@ class VideoGroundingHead(GroundingDINOHead):
         memory_text: Tensor,
         text_token_mask: Tensor,
         batch_data_samples: SampleList,
+        weights: Optional[Tensor] = None,
         rescale: bool = True,
     ) -> InstanceList:
         """Perform forward propagation and loss calculation of the detection

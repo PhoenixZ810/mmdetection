@@ -8,7 +8,7 @@ lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
     type='VideoGroundingDINO',
-    num_queries=1,
+    num_queries=300,
     with_box_refine=True,
     as_two_stage=True,
     use_time_embed=True,
@@ -86,11 +86,12 @@ model = dict(
     decoder=dict(
         num_layers=6,
         return_intermediate=True,
+        use_weight_loss=True,
         layer_cfg=dict(
             # query temporal self-attention layer
             time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
             # time query type
-            time_query_type='tq',
+            time_query_type='t',
             # query self attention layer
             use_self_attn=True,
             self_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),

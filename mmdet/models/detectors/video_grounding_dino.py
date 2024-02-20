@@ -186,7 +186,7 @@ class VideoGroundingDINO(GroundingDINO):
         # add temporal encoding to init time queries
         if self.use_time_embed:
             time_embed = (
-                self.time_embed(bs).repeat(self.num_queries, b, 1).to(query.device)
+                self.time_embed(bs).repeat(b, 1, 1).to(query.device)
             )  # n_queries * t, b, 256
             decoder_inputs_dict = dict(
                 query=query,
@@ -285,7 +285,7 @@ class VideoGroundingDINO(GroundingDINO):
             the initial and intermediate reference_points.
         """
 
-        inter_states, references = self.decoder(
+        inter_states, references, weights = self.decoder(
             query=query,
             value=memory,
             key_padding_mask=memory_mask,
@@ -306,7 +306,7 @@ class VideoGroundingDINO(GroundingDINO):
         #     # distributed training.
         #     inter_states[0] += self.dn_query_generator.label_embedding.weight[0, 0] * 0.0
 
-        decoder_outputs_dict = dict(hidden_states=inter_states, references=list(references))
+        decoder_outputs_dict = dict(hidden_states=inter_states, references=list(references), weights = weights)
         return decoder_outputs_dict
 
     def get_positive_map(self, tokenized, tokens_positive):
