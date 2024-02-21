@@ -8,7 +8,7 @@ lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
     type='VideoSTCATGroundingDINO',
-    num_queries=300,
+    num_queries=1,
     with_box_refine=True,
     as_two_stage=True,
     use_time_embed=True,
@@ -160,19 +160,19 @@ param_scheduler = [
 ]
 
 # dataset settings
-frames_num = 30
+frames_num = 50
 
-# scales = [96, 128]
-# max_size = 213
-# resizes = [80, 100, 120]
-# crop = 64
-# test_size = [128]
+scales = [96, 128]
+max_size = 213
+resizes = [80, 100, 120]
+crop = 64
+test_size = [128]
 
-scales = [128, 160, 192, 224]
-max_size = 373
-resizes = [100, 150, 200]
-crop = 96
-test_size = [224]
+# scales = [128, 160, 192, 224]
+# max_size = 373
+# resizes = [100, 150, 200]
+# crop = 96
+# test_size = [224]
 
 # scales = [192, 224, 256, 288, 320]
 # max_size = 533

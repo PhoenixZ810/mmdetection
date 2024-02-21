@@ -16,7 +16,7 @@ from .grounding_dino_layers import (
     GroundingDinoTransformerDecoder,
     GroundingDinoTransformerDecoderLayer,
 )
-from .video_grounding_dino_layers import VideoGroundingDinoTransformerDecoderLayer
+from .video_grounding_dino_layers import VideoGroundingDinoTransformerEncoder,VideoGroundingDinoTransformerDecoderLayer
 from mmengine.model import ModuleList
 from .utils import MLP, coordinate_to_encoding, inverse_sigmoid
 
@@ -24,6 +24,188 @@ try:
     from fairscale.nn.checkpoint import checkpoint_wrapper
 except Exception:
     checkpoint_wrapper = None
+
+
+class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEncoder):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.frame_cls = nn.Embedding(1, 256)  # the frame level local cls token
+        self.video_cls = nn.Embedding(1, 256)  # the video level global cls token
+
+    def _init_layers(self) -> None:
+        """Initialize encoder layers."""
+        if self.time_attn_layer_cfg is not None:
+            self.time_attn_layers = ModuleList(
+                [DetrTransformerEncoderLayer(**self.time_attn_layer_cfg) for _ in range(self.num_layers)]
+            )
+        self.layers = ModuleList(
+            [DeformableDetrTransformerEncoderLayer(**self.layer_cfg) for _ in range(self.num_layers)]
+        )
+        self.text_layers = ModuleList(
+            [DetrTransformerEncoderLayer(**self.text_layer_cfg) for _ in range(self.num_layers)]
+        )
+        self.fusion_layers = ModuleList(
+            [SingleScaleBiAttentionBlock(**self.fusion_layer_cfg) for _ in range(self.num_layers)]
+        )
+        self.embed_dims = self.layers[0].embed_dims
+        if self.num_cp > 0:
+            if checkpoint_wrapper is None:
+                raise NotImplementedError(
+                    'If you want to reduce GPU memory usage, \
+                    please install fairscale by executing the \
+                    following command: pip install fairscale.'
+                )
+            for i in range(self.num_cp):
+                self.layers[i] = checkpoint_wrapper(self.layers[i])
+                self.fusion_layers[i] = checkpoint_wrapper(self.fusion_layers[i])
+
+    def forward(
+        self,
+        query: Tensor,
+        query_pos: Tensor,
+        key_padding_mask: Tensor,
+        spatial_shapes: Tensor,
+        level_start_index: Tensor,
+        valid_ratios: Tensor,
+        memory_text: Tensor = None,
+        text_attention_mask: Tensor = None,
+        pos_text: Tensor = None,
+        text_self_attention_masks: Tensor = None,
+        position_ids: Tensor = None,
+        time_embed: Optional[Tensor] = None,
+    ):
+        """Forward function of Transformer encoder.
+
+        Args:
+            query (Tensor): The input query, has shape (bs, num_queries, dim).
+            query_pos (Tensor): The positional encoding for query, has shape
+                (bs, num_queries, dim).
+            key_padding_mask (Tensor): The `key_padding_mask` of `self_attn`
+                input. ByteTensor, has shape (bs, num_queries).
+            spatial_shapes (Tensor): Spatial shapes of features in all levels,
+                has shape (num_levels, 2), last dimension represents (h, w).
+            level_start_index (Tensor): The start index of each level.
+                A tensor has shape (num_levels, ) and can be represented
+                as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
+            valid_ratios (Tensor): The ratios of the valid width and the valid
+                height relative to the width and the height of features in all
+                levels, has shape (bs, num_levels, 2).
+            memory_text (Tensor, optional): Memory text. It has shape (bs,
+                len_text, text_embed_dims).
+            text_attention_mask (Tensor, optional): Text token mask. It has
+                shape (bs,len_text).
+            pos_text (Tensor, optional): The positional encoding for text.
+                Defaults to None.
+            text_self_attention_masks (Tensor, optional): Text self attention
+                mask. Defaults to None.
+            position_ids (Tensor, optional): Text position ids.
+                Defaults to None.
+        """
+        output = query
+        reference_points = self.get_encoder_reference_points(
+            spatial_shapes, valid_ratios, device=query.device
+        )
+        if self.text_layers:
+            # generate pos_text
+            bs, n_text, _ = memory_text.shape
+            if pos_text is None and position_ids is None:
+                pos_text = (
+                    torch.arange(n_text, device=memory_text.device)
+                    .float()
+                    .unsqueeze(0)
+                    .unsqueeze(-1)
+                    .repeat(bs, 1, 1)
+                )
+                pos_text = get_text_sine_pos_embed(pos_text, num_pos_feats=256, exchange_xy=False)
+            if position_ids is not None:
+                pos_text = get_text_sine_pos_embed(
+                    position_ids[..., None], num_pos_feats=256, exchange_xy=False
+                )
+        '''global & local query generate'''
+        durations = [query.shape[0]]
+        b = len(durations)
+        t = max(durations)
+        n_frames = sum(durations)
+        device = output.device
+        # The position embedding, token mask, src feature for local frame token, in spatial layer
+        frame_src = self.frame_cls.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
+        frame_pos = self.local_pos_embed.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
+        frame_mask = torch.zeros((n_frames, 1)).bool().to(device)
+
+        # The position embedding, token mask, in temporal layer
+        video_src = self.video_cls.weight.unsqueeze(0).repeat(b, 1, 1)  # b x 1 x d_model
+        temp_pos = time_embed(t + 1).repeat(1, b, 1)  # (T + 1) x b x d_model
+        temp_mask = torch.ones(b, t + 1).bool().to(device)
+        temp_mask[:, 0] = False  # the mask for the video cls token
+        for i_dur, dur in enumerate(durations):
+            temp_mask[i_dur, 1 : 1 + dur] = False
+
+        # main process
+        for layer_id, layer in enumerate(self.layers):
+            if self.fusion_layers:
+                output, memory_text = self.fusion_layers[layer_id](
+                    visual_feature=output,
+                    lang_feature=memory_text,
+                    attention_mask_v=key_padding_mask,
+                    attention_mask_l=text_attention_mask,
+                )
+            if self.text_layers:
+                text_num_heads = self.text_layers[layer_id].self_attn_cfg.num_heads
+                memory_text = self.text_layers[layer_id](
+                    query=memory_text,
+                    query_pos=(pos_text if pos_text is not None else None),
+                    attn_mask=~text_self_attention_masks.repeat(
+                        text_num_heads, 1, 1
+                    ),  # note we use ~ for mask here
+                    key_padding_mask=None,
+                )
+
+            # if layer_id == 0:
+            output = output.transpose(0, 1)
+            output = torch.cat([frame_src, output], dim=0)  # local_frames + fused_features
+            if src_key_padding_mask is not None:
+                src_key_padding_mask = torch.cat([frame_mask, src_key_padding_mask], dim=1)
+            pos = pos.transpose(0, 1)
+            pos = torch.cat([frame_pos, pos], dim=0)
+
+            output = layer(
+                query=output.transpose(0, 1),
+                query_pos=pos.transpose(0, 1),
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                key_padding_mask=src_key_padding_mask,
+            )
+
+            frames_src = torch.zeros(b, t + 1, 256).to(device)  # b x seq_len x C
+            frames_src_list = torch.split(output[:, 0, :], durations)  # [(n_frames, C)]
+
+            for i_dur, dur in enumerate(durations):
+                frames_src[i_dur, 0:1, :] = video_src[i_dur]  # pad the video cls token
+                frames_src[i_dur, 1 : 1 + dur, :] = frames_src_list[i_dur]  # [1,t+1,256]
+
+            # frames_src = frames_src.permute(1, 0, 2)  # permute BxLenxC to LenxBxC, [t+1,1,256]
+
+            if self.time_attn_layer_cfg is not None:
+                frames_src = self.time_attn_layers[layer_id](
+                    query=frame_src,
+                    query_pos=temp_pos.transpose(0, 1),
+                    key_padding_mask=temp_mask,
+                ).transpose(0, 1)
+
+            # frames_src = frames_src.permute(1, 0, 2)  # permute LenxBxC to BxLenxC
+            # dispatch the temporal context to each single frame token
+            frames_src_list = []
+            for i_dur, dur in enumerate(durations):
+                video_src[i_dur] = frames_src[i_dur, 0:1]
+                frames_src_list.append(frames_src[i_dur, 1 : 1 + dur])  # LenxC
+
+            frames_src = torch.cat(frames_src_list, dim=0)
+            output[0, :, :] = frames_src
+            output = output.transpose(0, 1)
+
+        return output, memory_text, frames_src, video_src
+
 
 class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
     """Transformer decoder of VideoDINO."""
@@ -57,6 +239,8 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
         reg_branches: nn.ModuleList,
         time_query: Optional[Tensor] = None,
         time_embed: Optional[Tensor] = None,
+        time_query_pos: Optional[Tensor] = None,
+        memory_pos: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor]:
         """Forward function of Transformer decoder.
@@ -131,7 +315,8 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                 time_query, weights = self.temp_layer[lid](
                     tgt=time_query,
                     memory=value,
-                    query_pos=query_pos,
+                    pos = memory_pos,
+                    query_pos=time_query_pos,
                     query_time_pos=time_embed,
                     self_attn_mask=self_attn_mask,
                     spatial_shapes=spatial_shapes,
@@ -177,6 +362,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
             return query, reference_points, time_query, weights.unsqueeze(0)
         else:
             return query, reference_points, time_query, []
+
 
 class TimeDecoderLayer(BaseModule):
     def __init__(
@@ -229,8 +415,8 @@ class TimeDecoderLayer(BaseModule):
         **kwargs
     ):
 
-        # q = k = self.with_pos_embed(tgt, query_pos + query_time_pos)
-        q = k = self.with_pos_embed(tgt, query_time_pos)
+        q = k = self.with_pos_embed(tgt, query_pos + query_time_pos)
+        # q = k = self.with_pos_embed(tgt, query_time_pos)
         # Temporal Self attention
         tgt2, weights = self.self_attn(
             q,
@@ -262,14 +448,12 @@ class TimeDecoderLayer(BaseModule):
             clip_start += clip_length
 
         assert clip_start == bs
-
-        memory = memory.transpose(0, 1)
+        memory = memory.transpose(0, 1)  # txlxf -> lxtxf
+        pos = pos.transpose(0, 1)  # txlxf -> lxtxf
         tgt2 = self.cross_attn_image(
-            query=tgt_cross,
-            key=memory,
+            query=self.with_pos_embed(tgt_cross, query_pos_cross),
+            key=self.with_pos_embed(memory, pos),
             value=memory,
-            # query_pos=query_pos_cross,
-            # key_pos = query_pos_cross,
             attn_mask=memory_mask,
             key_padding_mask=memory_key_padding_mask,
             **kwargs,
