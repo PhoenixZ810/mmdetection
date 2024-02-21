@@ -195,6 +195,28 @@ class video_visualizer:
                             args,
                             caption=phrase,
                         )
+                    else:
+                        img = item['inputs'].permute(0, 2, 3, 1).numpy()[i]  # from bchw to bhwc
+                        # img = Image.fromarray(img)
+                        img = img[..., [2, 1, 0]]  # bgr to rgb
+                        phrase = item['data_samples'][0].text
+                        image_h = img.shape[0]
+                        image_w = img.shape[1]
+                        new_image = img.copy()
+                        img_name = item['data_samples'][i].img_in_vid_ids
+
+                        file_key_name = img_name + '.jpg'
+                        # plt.imshow(img[..., [2, 1, 0]])
+                        # plt.axis('off')
+                        # plt.savefig(file_key_name,bbox_inches='tight', pad_inches=0)
+                        previous_locations = []
+                        previous_bboxes = []
+                        text_offset = 10
+                        text_offset_original = 4
+                        file_key_name = img_name + '.jpg'
+                        output_path = os.path.join(args.output_dir, file_key_name)
+                        self.imshow(new_image, file_name=output_path, caption=phrase)
+
         else:
             if item['inputs'].ndim == 4:
                 if args.i_per_v != 0:

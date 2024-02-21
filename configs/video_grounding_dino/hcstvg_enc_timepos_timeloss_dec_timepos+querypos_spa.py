@@ -8,7 +8,7 @@ lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
     type='VideoGroundingDINO',
-    num_queries=300,
+    num_queries=1,
     with_box_refine=True,
     as_two_stage=True,
     use_time_embed=True,

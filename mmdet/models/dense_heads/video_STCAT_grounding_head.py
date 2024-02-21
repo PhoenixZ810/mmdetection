@@ -104,11 +104,6 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         else:
             outputs_sted = None
 
-        if self.use_actioness:
-            outputs_actioness = self.action_embed(output_time)
-        else:
-            outputs_actioness = None
-
         for layer_id in range(hidden_states.shape[0]):
             reference = inverse_sigmoid(references[layer_id])
             # NOTE The last reference will not be used.
@@ -133,7 +128,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         all_layers_outputs_classes = torch.stack(all_layers_outputs_classes)
         all_layers_outputs_coords = torch.stack(all_layers_outputs_coords)
 
-        return all_layers_outputs_classes, all_layers_outputs_coords, outputs_sted,outputs_actioness
+        return all_layers_outputs_classes, all_layers_outputs_coords, outputs_sted
 
     def loss(
         self,
@@ -228,7 +223,6 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         all_layers_cls_scores: Tensor,
         all_layers_bbox_preds: Tensor,
         outputs_sted,
-        outputs_actioness,
         weights: Tensor,
         enc_cls_scores: Tensor,
         enc_bbox_preds: Tensor,
@@ -391,8 +385,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
             loss_dict.update(
                 self.loss_guided_attn(weights, positive_map, time_mask)
             )
-        if self.use_actioness:
-            loss_dict.update(self.loss_actioness(outputs_actioness, batch_gt_instances, durations, time_mask))
+
         if all_layers_denoising_cls_scores is not None and use_dn:
             # calculate denoising loss from all decoder layers
             dn_losses_cls, dn_losses_bbox, dn_losses_iou = self.loss_dn(
