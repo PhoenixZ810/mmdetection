@@ -8,9 +8,13 @@ import torch
 from mmengine.model import BaseModule
 from torch import Tensor, nn
 
-from mmcv.ops import MultiScaleDeformableAttention
 from mmcv.cnn.bricks.transformer import FFN, MultiheadAttention
+from mmdet.models.utils.vlfuse_helper import SingleScaleBiAttentionBlock
 
+from .detr_layers import DetrTransformerEncoderLayer
+from .deformable_detr_layers import (
+    DeformableDetrTransformerEncoderLayer,
+)
 from .grounding_dino_layers import (
     GroundingDinoTransformerEncoder,
     GroundingDinoTransformerDecoder,
@@ -18,7 +22,7 @@ from .grounding_dino_layers import (
 )
 from .video_grounding_dino_layers import VideoGroundingDinoTransformerEncoder,VideoGroundingDinoTransformerDecoderLayer
 from mmengine.model import ModuleList
-from .utils import MLP, coordinate_to_encoding, inverse_sigmoid
+from .utils import MLP, coordinate_to_encoding, inverse_sigmoid, get_text_sine_pos_embed
 
 try:
     from fairscale.nn.checkpoint import checkpoint_wrapper
@@ -27,8 +31,11 @@ except Exception:
 
 
 class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEncoder):
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, frame_layer_cfg=None,**kwargs) -> None:
+        self.frame_layer_cfg = frame_layer_cfg
         super().__init__(**kwargs)
+        # The position embedding of local frame tokens
+        self.local_pos_embed = nn.Embedding(1, 256)  # the learned pos embed for frame cls token
         self.frame_cls = nn.Embedding(1, 256)  # the frame level local cls token
         self.video_cls = nn.Embedding(1, 256)  # the video level global cls token
 
@@ -37,6 +44,16 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
         if self.time_attn_layer_cfg is not None:
             self.time_attn_layers = ModuleList(
                 [DetrTransformerEncoderLayer(**self.time_attn_layer_cfg) for _ in range(self.num_layers)]
+            )
+        if self.frame_layer_cfg is not None:
+            self.frame_layers = ModuleList(
+                [
+                    VideoSTCATDinoTransformerEncoderFrameLayer(**self.frame_layer_cfg)
+                    for _ in range(self.num_layers)
+                ]
+            )
+            self.video_layers = ModuleList(
+                [DetrTransformerEncoderLayer(**self.frame_layer_cfg) for _ in range(self.num_layers)]
             )
         self.layers = ModuleList(
             [DeformableDetrTransformerEncoderLayer(**self.layer_cfg) for _ in range(self.num_layers)]
@@ -128,9 +145,9 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
         n_frames = sum(durations)
         device = output.device
         # The position embedding, token mask, src feature for local frame token, in spatial layer
-        frame_src = self.frame_cls.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
-        frame_pos = self.local_pos_embed.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
-        frame_mask = torch.zeros((n_frames, 1)).bool().to(device)
+        frames_src = self.frame_cls.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
+        frames_pos = self.local_pos_embed.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
+        frames_mask = torch.zeros((n_frames, 1)).bool().to(device)
 
         # The position embedding, token mask, in temporal layer
         video_src = self.video_cls.weight.unsqueeze(0).repeat(b, 1, 1)  # b x 1 x d_model
@@ -159,52 +176,87 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
                     ),  # note we use ~ for mask here
                     key_padding_mask=None,
                 )
-
-            # if layer_id == 0:
-            output = output.transpose(0, 1)
-            output = torch.cat([frame_src, output], dim=0)  # local_frames + fused_features
-            if src_key_padding_mask is not None:
-                src_key_padding_mask = torch.cat([frame_mask, src_key_padding_mask], dim=1)
-            pos = pos.transpose(0, 1)
-            pos = torch.cat([frame_pos, pos], dim=0)
+            if self.time_attn_layer_cfg is not None:
+                output = self.time_attn_layers[layer_id](
+                    query=output.transpose(0, 1),
+                    query_pos=time_embed(t).repeat(1, b, 1).transpose(0, 1),
+                    key_padding_mask=None,
+                ).transpose(0, 1)
 
             output = layer(
-                query=output.transpose(0, 1),
-                query_pos=pos.transpose(0, 1),
+                query=output,
+                query_pos=query_pos,
                 reference_points=reference_points,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
-                key_padding_mask=src_key_padding_mask,
+                key_padding_mask=key_padding_mask,
             )
+            # generate frame query & global video query
+            frames_src_list = [self.frame_layers[layer_id](
+                query=frames_src.transpose(0, 1),  # t，1,256
+                query_pos=frames_pos.transpose(0, 1),
+                key=output,
+                key_pos=query_pos,
+                value=output,
+                key_padding_mask=key_padding_mask,
+            ).transpose(0,1).squeeze(0)]
 
             frames_src = torch.zeros(b, t + 1, 256).to(device)  # b x seq_len x C
-            frames_src_list = torch.split(output[:, 0, :], durations)  # [(n_frames, C)]
+            # frames_src_list = torch.split(output[:, 0, :], durations)  # [(n_frames, C)]
 
             for i_dur, dur in enumerate(durations):
                 frames_src[i_dur, 0:1, :] = video_src[i_dur]  # pad the video cls token
                 frames_src[i_dur, 1 : 1 + dur, :] = frames_src_list[i_dur]  # [1,t+1,256]
 
-            # frames_src = frames_src.permute(1, 0, 2)  # permute BxLenxC to LenxBxC, [t+1,1,256]
-
-            if self.time_attn_layer_cfg is not None:
-                frames_src = self.time_attn_layers[layer_id](
-                    query=frame_src,
+            if self.frame_layer_cfg is not None:
+                frames_src = self.video_layers[layer_id](
+                    query=frames_src,
                     query_pos=temp_pos.transpose(0, 1),
                     key_padding_mask=temp_mask,
-                ).transpose(0, 1)
+                )
 
             # frames_src = frames_src.permute(1, 0, 2)  # permute LenxBxC to BxLenxC
             # dispatch the temporal context to each single frame token
             frames_src_list = []
             for i_dur, dur in enumerate(durations):
-                video_src[i_dur] = frames_src[i_dur, 0:1]
+                video_src[i_dur] = frames_src[i_dur, 0:1] #video_src[1,1,256]
                 frames_src_list.append(frames_src[i_dur, 1 : 1 + dur])  # LenxC
 
-            frames_src = torch.cat(frames_src_list, dim=0)
-            output[0, :, :] = frames_src
-            output = output.transpose(0, 1)
-
+            frames_src = torch.cat(frames_src_list, dim=0).unsqueeze(0)
+        frames_src = frames_src.squeeze(0)
+        video_src = video_src.squeeze(0)
         return output, memory_text, frames_src, video_src
+
+
+class VideoSTCATDinoTransformerEncoderFrameLayer(DetrTransformerEncoderLayer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def forward(self, query: Tensor, query_pos: Tensor, key: Tensor, key_pos: Tensor, key_padding_mask: Tensor, value: Tensor) -> Tensor:
+        """Forward function of an encoder layer.
+
+        Args:
+            query (Tensor): The input query, has shape (bs, num_queries, dim).
+            query_pos (Tensor): The positional encoding for query, with
+                the same shape as `query`.
+            key_padding_mask (Tensor): The `key_padding_mask` of `self_attn`
+                input. ByteTensor. has shape (bs, num_queries).
+        Returns:
+            Tensor: forwarded results, has shape (bs, num_queries, dim).
+        """
+        query = self.self_attn(
+            query=query,
+            key=key,
+            value=value,
+            query_pos=query_pos,
+            key_pos=key_pos,
+            key_padding_mask=key_padding_mask,
+        )
+        query = self.norms[0](query)
+        query = self.ffn(query)
+        query = self.norms[1](query)
+
+        return query
 
 
 class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
@@ -297,7 +349,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
 
             # video decode
             query_sine_embed = coordinate_to_encoding(reference_points_input[:, :, 0, :])
-            query_pos = self.ref_point_head(query_sine_embed)
+            query_pos = self.ref_point_head(query_sine_embed)  #[t,num_query,256]
             query,weights_spa = layer(
                 query,
                 query_pos=query_pos,
@@ -358,10 +410,10 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                 )
             else:
                 return torch.stack(intermediate), torch.stack(intermediate_reference_points), time_query, None
-        if self.use_weight_loss:
+        elif self.use_weight_loss:
             return query, reference_points, time_query, weights.unsqueeze(0)
         else:
-            return query, reference_points, time_query, []
+            return query, reference_points, time_query, None
 
 
 class TimeDecoderLayer(BaseModule):

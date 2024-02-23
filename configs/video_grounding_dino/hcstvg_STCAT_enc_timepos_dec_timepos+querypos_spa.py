@@ -65,11 +65,11 @@ model = dict(
     encoder=dict(
         num_layers=6,
         num_cp=6,
-        # # visual temporal self-attention config
-        # time_attn_layer_cfg=dict(
-        #     self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
-        #     ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
-        # ),
+        # visual temporal self-attention config
+        time_attn_layer_cfg=dict(
+            self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
+            ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
+        ),
         # frame & video layer config
         frame_layer_cfg=dict(
             self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
@@ -119,7 +119,7 @@ model = dict(
         ),  # 2.0 in DeformDETR
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
-        use_enc_sted=True,
+        use_enc_sted=False,
         use_actioness=False,
         sted_loss_weight=10.0,
         time_only=False,
@@ -173,17 +173,17 @@ frames_num = 50
 # crop = 64
 # test_size = [128]
 
-# scales = [128, 160, 192, 224]
-# max_size = 373
-# resizes = [100, 150, 200]
-# crop = 96
-# test_size = [224]
+scales = [128, 160, 192, 224]
+max_size = 373
+resizes = [100, 150, 200]
+crop = 96
+test_size = [224]
 
-scales = [192, 224, 256, 288, 320]
-max_size = 533
-resizes = [200, 240, 280]
-crop = 160
-test_size = [320]
+# scales = [192, 224, 256, 288, 320]
+# max_size = 533
+# resizes = [200, 240, 280]
+# crop = 160
+# test_size = [320]
 
 video_train_pipeline = [
     dict(

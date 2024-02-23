@@ -18,7 +18,7 @@ from ..layers.transformer.video_grounding_dino_layers import (
     VideoGroundingDinoTransformerEncoder,
     VideoGroundingDinoTransformerDecoder,
 )
-from ..layers.transformer.video_STCAT_layer import VideoSTCATDinoTransformerDecoder
+from ..layers.transformer.video_STCAT_layer import VideoSTCATDinoTransformerDecoder, VideoSTCATGroundingDinoTransformerEncoder
 
 from .video_grounding_dino import VideoGroundingDINO
 
@@ -36,7 +36,7 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
     def _init_layers(self) -> None:
         """Initialize layers except for backbone, neck and bbox_head."""
         self.positional_encoding = SinePositionalEncoding(**self.positional_encoding)
-        self.encoder = VideoGroundingDinoTransformerEncoder(**self.encoder)
+        self.encoder = VideoSTCATGroundingDinoTransformerEncoder(**self.encoder)
         self.decoder = VideoSTCATDinoTransformerDecoder(**self.decoder)
         self.embed_dims = self.encoder.embed_dims
         self.query_embedding = nn.Embedding(self.num_queries, self.embed_dims)
@@ -55,9 +55,9 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         self.text_feat_map = nn.Linear(
             self.language_model.language_backbone.body.language_dim, self.embed_dims, bias=True
         )
-        self.spatial_temporal_layer = SpatialTemporalEncoder(
-            encoder_layer=TransformerEncoderLayer(), num_layers=6
-        )
+        # self.spatial_temporal_layer = SpatialTemporalEncoder(
+        #     encoder_layer=TransformerEncoderLayer(), num_layers=6
+        # )
         self.template_generator = TemplateGenerator()
 
     def forward_encoder(
@@ -73,10 +73,11 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         text_token_mask = text_dict['text_token_mask']
 
         if self.use_time_embed:
-            time_embed = self.time_embed(feat_pos.shape[0]).to(feat_pos.device)
+            # time_embed = self.time_embed(feat_pos.shape[0]).to(feat_pos.device)
+            time_embed = self.time_embed
         else:
             time_embed = None
-        memory, memory_text = self.encoder(
+        memory, memory_text, frames_src, video_src = self.encoder(
             query=feat,
             query_pos=feat_pos,
             key_padding_mask=feat_mask,  # for self_attn
@@ -97,6 +98,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
             spatial_shapes=spatial_shapes,
             memory_text=memory_text,
             text_token_mask=text_token_mask,
+            frames_cls=frames_src,
+            video_cls=video_src
         )
         return encoder_outputs_dict
 
@@ -108,6 +111,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         memory_text: Tensor,
         text_token_mask: Tensor,
         memory_pos=None,
+        frames_cls=None,
+        video_cls=None,
         batch_data_samples: OptSampleList = None,
     ) -> Tuple[Dict]:
         bs, _, c = memory.shape
@@ -139,6 +144,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         topk_coords_unact = topk_coords_unact.detach()
 
         if self.bbox_head.use_enc_sted:
+            # enc_outputs_sted = self.bbox_head.sted_branch[0](frames_cls.unsqueeze(1))
+            # topk_sted = enc_outputs_sted
             enc_outputs_sted = self.bbox_head.sted_branch[0](output_memory)
             topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
 
@@ -150,14 +157,14 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
             time_query = time_query.repeat(1, bs, 1).transpose(0, 1).to(query.device)
 
         vis_durations = batch_data_samples[0].durations
-        img_memory, frames_cls, videos_cls = self.spatial_temporal_layer(
-            memory,
-            src_key_padding_mask=memory_mask,
-            pos=memory_pos,
-            durations=vis_durations,
-            time_embed=self.time_embed,
-        )  # frame_cls[t,d_model], video_cls[b,d_model]
-        pos_query, temp_query = self.template_generator(frames_cls, videos_cls, vis_durations)
+        # img_memory, frames_cls, videos_cls = self.spatial_temporal_layer(
+        #     memory,
+        #     src_key_padding_mask=memory_mask,
+        #     pos=memory_pos,
+        #     durations=vis_durations,
+        #     time_embed=self.time_embed,
+        # )  # frame_cls[t,d_model], video_cls[b,d_model]
+        temp_query = self.template_generator(frames_cls, video_cls, vis_durations)
         temp_query = torch.split(temp_query, vis_durations, dim=0)
         # tgt = torch.zeros(t, b, self.d_model).to(query.device)
         # time_tgt = torch.zeros(t, b, self.d_model).to(query.device)
@@ -457,9 +464,9 @@ class TemplateGenerator(nn.Module):
         self.d_model = 256
         self.pos_query_dim = 4
         self.content_proj = nn.Linear(self.d_model, self.d_model)
-        self.gamma_proj = nn.Linear(self.d_model, self.d_model)
-        self.beta_proj = nn.Linear(self.d_model, self.d_model)
-        self.anchor_proj = nn.Linear(self.d_model, self.pos_query_dim)
+        # self.gamma_proj = nn.Linear(self.d_model, self.d_model)
+        # self.beta_proj = nn.Linear(self.d_model, self.d_model)
+        # self.anchor_proj = nn.Linear(self.d_model, self.pos_query_dim)
 
     def forward(
         self, frames_cls=None, videos_cls=None, durations=None,  # [b, d_model]  # [b, d_model]
@@ -472,13 +479,14 @@ class TemplateGenerator(nn.Module):
         temp_query = []
         for i_b in range(b):
             frames_cls = frames_cls_list[i_b]
-            video_cls = videos_cls[i_b]
-            gamma_vec = torch.tanh(self.gamma_proj(video_cls))
-            beta_vec = torch.tanh(self.beta_proj(video_cls))
-            pos_query.append(self.anchor_proj(gamma_vec * frames_cls + beta_vec))
+            # video_cls = videos_cls[i_b]
+            # gamma_vec = torch.tanh(self.gamma_proj(video_cls))
+            # beta_vec = torch.tanh(self.beta_proj(video_cls))
+            # pos_query.append(self.anchor_proj(gamma_vec * frames_cls + beta_vec))
             temp_query.append(content_query[i_b].unsqueeze(0).repeat(frames_cls.shape[0], 1))
 
-        pos_query = torch.cat(pos_query, dim=0)
+        # pos_query = torch.cat(pos_query, dim=0)
         temp_query = torch.cat(temp_query, dim=0)
 
-        return pos_query, temp_query
+        # return pos_query, temp_query
+        return temp_query

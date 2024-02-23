@@ -65,11 +65,11 @@ model = dict(
     encoder=dict(
         num_layers=6,
         num_cp=6,
-        # visual temporal self-attention config
-        time_attn_layer_cfg=dict(
-            self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
-            ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
-        ),
+        # # visual temporal self-attention config
+        # time_attn_layer_cfg=dict(
+        #     self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
+        #     ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
+        # ),
         # visual layer config, MultiScaleDeformableAttention
         layer_cfg=dict(
             self_attn_cfg=dict(embed_dims=256, num_levels=4, dropout=0.0, im2col_step=1),
@@ -155,7 +155,7 @@ optim_wrapper = dict(
 max_epochs = 30
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=50),
-    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[24], gamma=0.1),
+    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[20,24], gamma=0.1),
 ]
 
 # dataset settings
@@ -167,11 +167,23 @@ frames_num = 50
 # crop = 64
 # test_size = [128]
 
-scales = [128, 160, 192, 224]
-max_size = 373
-resizes = [100, 150, 200]
-crop = 96
-test_size = [224]
+# scales = [128, 160, 192, 224]
+# max_size = 373
+# resizes = [100, 150, 200]
+# crop = 96
+# test_size = [224]
+
+scales = [192, 224, 256, 288, 320]
+max_size = 533
+resizes = [200, 240, 280]
+crop = 160
+test_size = [320]
+
+# scales = [256, 288, 320, 352, 384, 416, 448]
+# max_size = 746
+# resizes = [240, 300, 360]
+# crop = 224
+# test_size = [448]
 
 video_train_pipeline = [
     dict(
