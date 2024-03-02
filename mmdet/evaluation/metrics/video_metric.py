@@ -139,7 +139,7 @@ class VideoMetric(BaseMetric):
                 results["pred_sted"].append(data_samples[i]['pred_instances']['sted'])
 
         b = len(durations)
-        gts = [x for x in data_batch if len(x.gt_instances.bboxes)]  # 判断真实框的数目
+        gts = [x for x in data_batch if not torch.all(x.gt_instances.bboxes==0)]  # 判断真实框的数目
         if len(gts) != inter_idx[0][1] - inter_idx[0][0] + 1:
             print("none")
 

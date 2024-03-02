@@ -813,16 +813,20 @@ class VideoDataPreprocessor(ImgDataPreprocessor):
                 split_data_sample = copy.deepcopy(data_sample)
                 meta_info = data_sample.metainfo
                 meta_info['img_in_vid_ids'] = data_sample.img_in_vid_ids[j]
-                # if data_sample.img_in_vid_ids[j] in ['3_1715', '2_1715']:
-                #     print('fuck')
+
                 split_data_sample.set_metainfo(meta_info)
                 instance_data = InstanceData()
-                instance_data.bboxes = data_sample.gt_instances.bboxes[j]
-                if data_sample.gt_instances.bboxes[j].size(0) == 0:  # no box in this frame
-                    instance_data.labels = torch.empty(0, 1)
+                # if data_sample.gt_instances.bboxes[j].size(0) == 0:  # no box in this frame
+                #     instance_data.labels = torch.empty(0, 1)
+                # else:
+                #     instance_data.labels = data_sample.gt_instances.labels[j].unsqueeze(0)
+                #     box_frame = box_frame + 1
+                instance_data.labels = data_sample.gt_instances.labels[j].unsqueeze(0)
+                if instance_data.labels == 0:
+                    instance_data.bboxes = torch.zeros(1,4)
                 else:
-                    instance_data.labels = data_sample.gt_instances.labels[j].unsqueeze(0)
-                    box_frame = box_frame + 1
+                    instance_data.bboxes = data_sample.gt_instances.bboxes[j]
+                box_frame = box_frame + 1
 
                 split_data_sample.gt_instances = instance_data
                 split_data_sample.durations = durations

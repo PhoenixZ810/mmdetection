@@ -14,10 +14,12 @@ from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList, SampleList
 from mmdet.utils import ConfigType
 from ..layers import SinePositionalEncoding
-from ..layers.transformer.video_grounding_dino_layers import (
-    VideoGroundingDinoTransformerEncoder,
-    VideoGroundingDinoTransformerDecoder,
-)
+from mmengine.model import ModuleList
+# from ..layers.transformer.video_grounding_dino_layers import (
+#     VideoGroundingDinoTransformerEncoder,
+#     VideoGroundingDinoTransformerDecoder,
+# )
+from ..layers import DetrTransformerEncoderLayer
 from ..layers.transformer.video_STCAT_layer import VideoSTCATDinoTransformerDecoder, VideoSTCATGroundingDinoTransformerEncoder
 
 from .video_grounding_dino import VideoGroundingDINO
@@ -27,10 +29,15 @@ from .video_grounding_dino import VideoGroundingDINO
 class VideoSTCATGroundingDINO(VideoGroundingDINO):
     def __init__(
         self,
+        frame_layer_cfg: Optional[ConfigType] = None,
+        use_time_query: bool = True,
         *args,
         **kwargs,
     ) -> None:
+        self.frame_layer_cfg = frame_layer_cfg
+        self.use_time_query = use_time_query
         super().__init__(*args, **kwargs)
+        self.video_cls = nn.Embedding(1, 256)  # the video level global cls token
         # print(self)
 
     def _init_layers(self) -> None:
@@ -40,7 +47,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         self.decoder = VideoSTCATDinoTransformerDecoder(**self.decoder)
         self.embed_dims = self.encoder.embed_dims
         self.query_embedding = nn.Embedding(self.num_queries, self.embed_dims)
-        self.time_query = nn.Embedding(1, self.embed_dims)
+        if self.use_time_query:
+            self.time_query = nn.Embedding(1, self.embed_dims)
         num_feats = self.positional_encoding.num_feats
         assert num_feats * 2 == self.embed_dims, (
             f'embed_dims should be exactly 2 times of num_feats. ' f'Found {self.embed_dims} and {num_feats}.'
@@ -59,6 +67,11 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         #     encoder_layer=TransformerEncoderLayer(), num_layers=6
         # )
         self.template_generator = TemplateGenerator()
+        if self.frame_layer_cfg is not None:
+            self.video_layers = DetrTransformerEncoderLayer(**self.frame_layer_cfg)
+            # self.video_layers = ModuleList(
+            #     [DetrTransformerEncoderLayer(**self.frame_layer_cfg) for _ in range(3)]
+            # )
 
     def forward_encoder(
         self,
@@ -77,7 +90,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
             time_embed = self.time_embed
         else:
             time_embed = None
-        memory, memory_text, frames_src, video_src = self.encoder(
+        # memory, memory_text, frames_src, video_src = self.encoder(
+        memory, memory_text = self.encoder(
             query=feat,
             query_pos=feat_pos,
             key_padding_mask=feat_mask,  # for self_attn
@@ -98,8 +112,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
             spatial_shapes=spatial_shapes,
             memory_text=memory_text,
             text_token_mask=text_token_mask,
-            frames_cls=frames_src,
-            video_cls=video_src
+            # frames_cls=frames_src,
+            # video_cls=video_src
         )
         return encoder_outputs_dict
 
@@ -111,8 +125,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         memory_text: Tensor,
         text_token_mask: Tensor,
         memory_pos=None,
-        frames_cls=None,
-        video_cls=None,
+        # frames_cls=None,
+        # video_cls=None,
         batch_data_samples: OptSampleList = None,
     ) -> Tuple[Dict]:
         bs, _, c = memory.shape
@@ -126,7 +140,7 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         cls_out_features = self.bbox_head.cls_branches[self.decoder.num_layers].max_text_len
         enc_outputs_coord_unact = (
             self.bbox_head.reg_branches[self.decoder.num_layers](output_memory) + output_proposals
-        )
+        )  # [t, l, 4]
 
         # NOTE The DINO selects top-k proposals according to scores of
         # multi-class classification, while DeformDETR, where the input
@@ -139,24 +153,63 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         )
         topk_coords_unact = torch.gather(
             enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4)
-        )
+        )  # [t,1,4]
         topk_coords = topk_coords_unact.sigmoid()
         topk_coords_unact = topk_coords_unact.detach()
 
-        if self.bbox_head.use_enc_sted:
-            # enc_outputs_sted = self.bbox_head.sted_branch[0](frames_cls.unsqueeze(1))
-            # topk_sted = enc_outputs_sted
-            enc_outputs_sted = self.bbox_head.sted_branch[0](output_memory)
-            topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
+        # if self.bbox_head.use_enc_sted:
+        #     # enc_outputs_sted = self.bbox_head.sted_branch[0](frames_cls.unsqueeze(1))
+        #     # topk_sted = enc_outputs_sted
+        #     enc_outputs_sted = self.bbox_head.sted_branch[0](output_memory)
+        #     topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
 
         query = self.query_embedding.weight[:, None, :]
         query = query.repeat(1, bs, 1).transpose(0, 1)
 
-        if self.use_time_embed:
+        if self.use_time_query:
             time_query = self.time_query.weight[None, :, :]
             time_query = time_query.repeat(1, bs, 1).transpose(0, 1).to(query.device)
 
         vis_durations = batch_data_samples[0].durations
+        b = len(vis_durations)
+        t = max(vis_durations)
+        frames_cls = torch.gather(output_memory, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 256))
+        # The position embedding, token mask, in temporal layer
+        video_src = self.video_cls.weight.unsqueeze(0).repeat(1, 1, 1)  # b x 1 x d_model
+        temp_pos = self.time_embed(t + 1).repeat(1, b, 1)  # (T + 1) x b x d_model
+        temp_mask = torch.ones(b, t + 1).bool().to(query.device)
+        temp_mask[:, 0] = False  # the mask for the video cls token
+        for i_dur, dur in enumerate(vis_durations):
+            temp_mask[i_dur, 1 : 1 + dur] = False
+        frames_src = torch.zeros(b, t + 1, 256).to(query.device)  # b x seq_len x C
+        for i_dur, dur in enumerate(vis_durations):
+            frames_src[i_dur, 0:1, :] = video_src[i_dur]  # pad the video cls token
+            frames_src[i_dur, 1 : 1 + dur, :] = frames_cls[:,0,:]  # [1,t+1,256]
+
+        if self.frame_layer_cfg is not None:
+            frames_src = self.video_layers(
+                query=frames_src,
+                query_pos=temp_pos.transpose(0, 1),
+                key_padding_mask=temp_mask,
+            )
+            # for layer in self.video_layers:
+            #     frames_src = layer(
+            #         query=frames_src,
+            #         query_pos=temp_pos.transpose(0, 1),
+            #         key_padding_mask=temp_mask,
+            #     )
+        frames_src_list = []
+        for i_dur, dur in enumerate(vis_durations):
+            video_src[i_dur] = frames_src[i_dur, 0:1]  # video_src[1,1,256]
+            frames_src_list.append(frames_src[i_dur, 1 : 1 + dur])  # LenxC
+
+        frames_cls = torch.cat(frames_src_list, dim=0)
+        video_cls = video_src.squeeze(0)
+
+        if self.bbox_head.use_enc_sted:
+            enc_outputs_sted = self.bbox_head.sted_branches[-1](frames_cls.unsqueeze(1))
+            topk_sted = enc_outputs_sted
+
         # img_memory, frames_cls, videos_cls = self.spatial_temporal_layer(
         #     memory,
         #     src_key_padding_mask=memory_mask,
@@ -164,7 +217,9 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         #     durations=vis_durations,
         #     time_embed=self.time_embed,
         # )  # frame_cls[t,d_model], video_cls[b,d_model]
-        temp_query = self.template_generator(frames_cls, video_cls, vis_durations)
+        temp_query, temp_frames_query = self.template_generator(frames_cls, video_cls, vis_durations)
+        if not self.use_time_query:
+            time_query = video_cls.unsqueeze(0).repeat(t, 1, 1)  # [t, b, 256]
         temp_query = torch.split(temp_query, vis_durations, dim=0)
         # tgt = torch.zeros(t, b, self.d_model).to(query.device)
         # time_tgt = torch.zeros(t, b, self.d_model).to(query.device)
@@ -208,6 +263,7 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
                 text_attention_mask=~text_token_mask,
                 time_embed=time_embed,
                 time_query_pos=query_temporal_embed,
+                time_query_frame_pos=temp_frames_query,
                 memory_pos = memory_pos
             )
         else:
@@ -257,6 +313,7 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         time_query: Optional[Tensor] = None,
         time_embed: Optional[Tensor] = None,
         time_query_pos: Optional[Tensor] = None,
+        time_query_frame_pos: Optional[Tensor] = None,
         **kwargs,
     ) -> Dict:
         """Forward with Transformer decoder.
@@ -311,7 +368,8 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
             valid_ratios=valid_ratios,
             reg_branches=self.bbox_head.reg_branches,
             time_embed=time_embed,
-            time_query_pos = time_query_pos,
+            time_query_pos=time_query_pos,
+            time_query_frame_pos=time_query_frame_pos,
             **kwargs,
         )
         decoder_outputs_dict = dict(
@@ -325,6 +383,7 @@ class VideoSTCATGroundingDINO(VideoGroundingDINO):
         #     # target in this GPU), otherwise, this will raise runtime error in
         #     # distributed training.
         #     inter_states[0] += self.dn_query_generator.label_embedding.weight[0, 0] * 0.0
+
 
 class SpatialTemporalEncoder(nn.Module):
 
@@ -464,6 +523,7 @@ class TemplateGenerator(nn.Module):
         self.d_model = 256
         self.pos_query_dim = 4
         self.content_proj = nn.Linear(self.d_model, self.d_model)
+        self.time_pos_proj = nn.Linear(self.d_model, self.d_model)
         # self.gamma_proj = nn.Linear(self.d_model, self.d_model)
         # self.beta_proj = nn.Linear(self.d_model, self.d_model)
         # self.anchor_proj = nn.Linear(self.d_model, self.pos_query_dim)
@@ -471,6 +531,25 @@ class TemplateGenerator(nn.Module):
     def forward(
         self, frames_cls=None, videos_cls=None, durations=None,  # [b, d_model]  # [b, d_model]
     ):
+        # b = len(durations)
+        # frames_cls_list = torch.split(frames_cls, durations, dim=0)
+        # content_query = self.content_proj(videos_cls)
+
+        # pos_query = []
+        # temp_query = []
+        # for i_b in range(b):
+        #     frames_cls = frames_cls_list[i_b]
+        #     # video_cls = videos_cls[i_b]
+        #     # gamma_vec = torch.tanh(self.gamma_proj(video_cls))
+        #     # beta_vec = torch.tanh(self.beta_proj(video_cls))
+        #     # pos_query.append(self.anchor_proj(gamma_vec * frames_cls + beta_vec))
+        #     temp_query.append(content_query[i_b].unsqueeze(0).repeat(frames_cls.shape[0], 1))
+
+        # # pos_query = torch.cat(pos_query, dim=0)
+        # temp_query = torch.cat(temp_query, dim=0)
+
+        # # return pos_query, temp_query
+        # return temp_query
         b = len(durations)
         frames_cls_list = torch.split(frames_cls, durations, dim=0)
         content_query = self.content_proj(videos_cls)
@@ -479,6 +558,7 @@ class TemplateGenerator(nn.Module):
         temp_query = []
         for i_b in range(b):
             frames_cls = frames_cls_list[i_b]
+            frame_query = self.time_pos_proj(frames_cls).unsqueeze(1)
             # video_cls = videos_cls[i_b]
             # gamma_vec = torch.tanh(self.gamma_proj(video_cls))
             # beta_vec = torch.tanh(self.beta_proj(video_cls))
@@ -489,4 +569,4 @@ class TemplateGenerator(nn.Module):
         temp_query = torch.cat(temp_query, dim=0)
 
         # return pos_query, temp_query
-        return temp_query
+        return temp_query, frame_query

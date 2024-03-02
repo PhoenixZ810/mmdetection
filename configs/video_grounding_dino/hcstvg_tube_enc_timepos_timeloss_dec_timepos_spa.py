@@ -1,5 +1,5 @@
 _base_ = [
-    './freezeenc_dec_timepos+querypos_spa.py',
+    './hcstvg_enc_timepos_timeloss_dec_timepos+querypos_spa.py',
 ]
 # pretrained = '/mnt/data/mmperc/huanghaian/code/GLIP/swin_tiny_patch4_window7_224.pth'  # noqa
 load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_dino/v3det_1/epoch_30.pth'
@@ -7,13 +7,11 @@ load_from = '/mnt/data/mmperc/huanghaian/code/mm_rtdetr/mmdetection/grounding_di
 lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
-    type='VideoSTCATGroundingDINO',
-    img_encoder_from_cache=True,
+    type='VideoTubeGroundingDINO',
     num_queries=1,
     with_box_refine=True,
     as_two_stage=True,
     use_time_embed=True,
-    use_time_query=False,
     max_time_pos_frames=200,
     freeze_backbone=True,
     freeze_language_model=True,
@@ -64,16 +62,15 @@ model = dict(
         norm_cfg=dict(type='GN', num_groups=32),
         num_outs=4,
     ),
-    # frame & video layer config
-    frame_layer_cfg=dict(
+    fast_layer_cfg=dict(
         self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
         ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
     ),
     encoder=dict(
         num_layers=6,
         num_cp=6,
-        # visual temporal self-attention config
-        time_attn_img_layer_cfg=dict(
+        # # visual temporal self-attention config
+        time_attn_layer_cfg=dict(
             self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
             ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
         ),
@@ -112,7 +109,7 @@ model = dict(
     ),
     positional_encoding=dict(num_feats=128, normalize=True, offset=0.0, temperature=20),
     bbox_head=dict(
-        type='VideoSTCATGroundingHead',
+        type='VideoGroundingHead',
         num_classes=256,
         sync_cls_avg_factor=True,
         contrastive_cfg=dict(max_text_len=256, log_scale='auto', bias=True),
@@ -122,7 +119,6 @@ model = dict(
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
         use_enc_sted=True,
-        use_actioness=False,
         sted_loss_weight=10.0,
         time_only=False,
         exclude_cls=False,
@@ -160,14 +156,14 @@ optim_wrapper = dict(
     ),
 )
 
-max_epochs = 50
+max_epochs = 30
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=50),
-    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[24], gamma=0.1),
+    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[20, 24], gamma=0.1),
 ]
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval=1)
+
 # dataset settings
-frames_num = 50
+frames_num = 100
 
 # scales = [96, 128]
 # max_size = 213
@@ -186,6 +182,12 @@ test_size = [224]
 # resizes = [200, 240, 280]
 # crop = 160
 # test_size = [320]
+
+# scales = [256, 288, 320, 352, 384, 416, 448]
+# max_size = 746
+# resizes = [240, 300, 360]
+# crop = 224
+# test_size = [448]
 
 video_train_pipeline = [
     dict(

@@ -116,7 +116,9 @@ vis/
 docs/modelzoo_statistics.md
 mmdet/.mim
 work_dirs/
+new_work_dirs/
 debug/
+data_cache/
 ~/
 
 # Pytorch

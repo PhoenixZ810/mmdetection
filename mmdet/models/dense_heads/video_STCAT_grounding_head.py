@@ -30,6 +30,12 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
             reg_branch.append(nn.ReLU())
         reg_branch.append(Linear(self.embed_dims, 4))
         reg_branch = nn.Sequential(*reg_branch)
+        time_branch = []
+        for _ in range(self.num_reg_fcs):
+            time_branch.append(Linear(self.embed_dims, self.embed_dims))
+            time_branch.append(nn.ReLU())
+        time_branch.append(Linear(self.embed_dims, 4))
+        time_branch = nn.Sequential(*reg_branch)
 
         # NOTE: due to the fc_cls is a contrastive embedding and don't
         # have any trainable parameters,we do not need to copy it.
@@ -41,14 +47,24 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
             self.reg_branches = nn.ModuleList([copy.deepcopy(reg_branch) for _ in range(self.num_pred_layer)])
 
         '''branch for start and end time prediction'''
+        # if self.use_sted:
+        #     self.sted_branch = MLP(self.embed_dims, self.embed_dims, 2, 2)
+        # if self.use_enc_sted:
+        #     if self.share_pred_layer:
+        #         self.sted_branch = nn.ModuleList([self.sted_branch, self.sted_branch])
+        #     else:
+        #         self.sted_branch = nn.ModuleList(
+        #             [copy.deepcopy(self.sted_branch), copy.deepcopy(self.sted_branch)]
+        #         )
         if self.use_sted:
-            self.sted_branch = MLP(self.embed_dims, self.embed_dims, 2, 2)
-        if self.use_enc_sted:
-            if self.share_pred_layer:
-                self.sted_branch = nn.ModuleList([self.sted_branch, self.sted_branch])
+            sted_branch = MLP(self.embed_dims, self.embed_dims, 2, 2)
+            if not self.use_enc_sted:
+                self.sted_branches = nn.ModuleList(
+                    [copy.deepcopy(sted_branch) for _ in range(self.num_pred_layer-1)]
+                )
             else:
-                self.sted_branch = nn.ModuleList(
-                    [copy.deepcopy(self.sted_branch), copy.deepcopy(self.sted_branch)]
+                self.sted_branches = nn.ModuleList(
+                    [copy.deepcopy(sted_branch) for _ in range(self.num_pred_layer)]
                 )
         if self.use_actioness:
             self.action_embed = MLP(self.embed_dims, self.embed_dims, 1, 2)
@@ -95,16 +111,21 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         """
         all_layers_outputs_classes = []
         all_layers_outputs_coords = []
-
-        if self.use_sted:
-            if self.use_enc_sted:
-                outputs_sted = self.sted_branch[1](output_time)
-            else:
-                outputs_sted = self.sted_branch(output_time)
-        else:
-            outputs_sted = None
+        all_layers_outputs_sted = []
+        # if self.use_sted:
+        #     if self.use_enc_sted:
+        #         outputs_sted = self.sted_branch[1](output_time)
+        #     else:
+        #         outputs_sted = self.sted_branch(output_time)
+        # else:
+        #     outputs_sted = None
 
         for layer_id in range(hidden_states.shape[0]):
+            if self.use_sted:
+                output_sted = self.sted_branches[layer_id](output_time[layer_id])
+                all_layers_outputs_sted.append(output_sted)
+            else:
+                outputs_sted = None
             reference = inverse_sigmoid(references[layer_id])
             # NOTE The last reference will not be used.
             hidden_state = hidden_states[layer_id]
@@ -124,7 +145,8 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
             outputs_coord = tmp_reg_preds.sigmoid()
             all_layers_outputs_classes.append(outputs_class)
             all_layers_outputs_coords.append(outputs_coord)
-
+        if self.use_sted:
+            outputs_sted = torch.stack(all_layers_outputs_sted)
         all_layers_outputs_classes = torch.stack(all_layers_outputs_classes)
         all_layers_outputs_coords = torch.stack(all_layers_outputs_coords)
 
@@ -194,7 +216,7 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
         # set time_mask of valid video frames for each batchsize(duration)
         if self.use_sted:
             device = hidden_states.device
-            time_mask = torch.zeros(1, outs[2].shape[0]).bool().to(device)
+            time_mask = torch.zeros(1, outs[2].shape[1]).bool().to(device)
             # time_mask = torch.zeros(1, outs[0].shape[0]).bool().to(device)
             for i_dur, duration in enumerate(durations):
                 time_mask[i_dur, :duration] = True
@@ -476,6 +498,59 @@ class VideoSTCATGroundingHead(VideoGroundingHead):
             rescale=rescale,
         )
         return predictions
+
+    def predict_by_feat(
+        self,
+        all_layers_cls_scores: Tensor,
+        all_layers_bbox_preds: Tensor,
+        outputs_sted,
+        batch_img_metas: List[Dict],
+        batch_token_positive_maps: Optional[List[dict]] = None,
+        rescale: bool = False,
+    ) -> InstanceList:
+        """Transform a batch of output features extracted from the head into
+        bbox results.
+
+        Args:
+            all_layers_cls_scores (Tensor):  Classification scores of all
+                decoder layers, has shape (num_decoder_layers, bs, num_queries,
+                cls_out_channels).
+            all_layers_bbox_preds (Tensor): Regression outputs of all decoder
+                layers. Each is a 4D-tensor with normalized coordinate format
+                (cx, cy, w, h) and shape (num_decoder_layers, bs, num_queries,
+                4) with the last dimension arranged as (cx, cy, w, h).
+            batch_img_metas (List[Dict]): _description_
+            batch_token_positive_maps (list[dict], Optional): Batch token
+                positive map. Defaults to None.
+            rescale (bool): If True, return boxes in original image space.
+                Defaults to False.
+
+        Returns:
+            list[:obj:`InstanceData`]: Object detection results of each image
+            after the post process. Each item usually contains following keys.
+
+                - scores (Tensor): Classification scores, has a shape
+                  (num_instance, )
+                - labels (Tensor): Labels of bboxes, has a shape
+                  (num_instances, ).
+                - bboxes (Tensor): Has a shape (num_instances, 4),
+                  the last dimension 4 arrange as (x1, y1, x2, y2).
+        """
+        cls_scores = all_layers_cls_scores[-1]
+        bbox_preds = all_layers_bbox_preds[-1]
+        model_outputs_sted = outputs_sted[-1]
+        result_list = []
+        for img_id in range(len(batch_img_metas)):
+            cls_score = cls_scores[img_id]
+            bbox_pred = bbox_preds[img_id]
+            outputs_sted = model_outputs_sted[img_id]
+            img_meta = batch_img_metas[img_id]
+            token_positive_maps = batch_token_positive_maps[img_id]
+            results = self._predict_by_feat_single(
+                cls_score, bbox_pred, outputs_sted, token_positive_maps, img_meta, rescale
+            )
+            result_list.append(results)
+        return result_list
 
     def loss_guided_attn(self, weights, positive_map, time_mask=None):
         """Compute guided attention loss

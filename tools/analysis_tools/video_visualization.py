@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 import textwrap
 
-import ast
+import torch
 import os
 import numpy as np
 
@@ -20,8 +20,6 @@ import matplotlib.pylab as pylab
 pylab.rcParams['figure.figsize'] = 20, 12
 
 import cv2
-import base64
-import io
 import argparse
 import os.path as osp
 
@@ -91,7 +89,8 @@ def main():
     visualizer = video_visualizer()
     if args.weights is not None:
         inferencer = VideoInferencer(model=args.config, weights=args.weights, device=args.device)
-        for item in dataset:
+        for i in range(0,len(dataset)):
+            item = dataset[i]
             predicts = inferencer(item)
             visualizer.vis_image(item=item, args=args, predicts=predicts)
     else:
@@ -120,7 +119,7 @@ class video_visualizer:
         if predicts is not None:
             pred_boxes = [pred.pred_instances.bboxes for pred in predicts]
             pred_scores = [pred.pred_instances.scores for pred in predicts]
-            # pred_sted = [pred.pred_instances.sted for pred in predicts]
+            pred_sted_prob = [pred.pred_instances.sted for pred in predicts]
 
             if item['inputs'].ndim == 4:
                 if args.i_per_v != 0:
@@ -133,12 +132,34 @@ class video_visualizer:
                 gt_bboxes = [
                     datasample.gt_instances.get('bboxes', None).numpy() for datasample in data_samples
                 ]
+                frames_id = [data_samples[0].frames_id]
+                pred_steds = self.PostProcessSTVG(
+                    pred_sted_prob, frames_id=frames_id
+                )
+                pred_sted = [int(pred_steds[0][0]), int(pred_steds[0][1])]
+                gt_sted = [data_samples[0].tube_start_frame, data_samples[0].tube_end_frame]
+                max_start = max(gt_sted[0], pred_sted[0])
+                min_end = min(gt_sted[1], pred_sted[1])
+                min_start = min(gt_sted[0], pred_sted[0])
+                max_end = max(gt_sted[1], pred_sted[1])
+                if min_end <= max_start:
+                    tiou = 0
+                else:
+                    intersection = min_end - max_start
+                    gt_span = gt_sted[1] - gt_sted[0]
+                    pred_span = pred_sted[1] - pred_sted[0]
+                    union = gt_span + pred_span - intersection
+                    tiou = intersection / union
+
                 for i in range(i_per_v):
                     if gt_bboxes[i].shape[0] != 0:
                         img = item['inputs'].permute(0, 2, 3, 1).numpy()[i]  # from bchw to bhwc
                         # img = Image.fromarray(img)
                         img = img[..., [2, 1, 0]]  # bgr to rgb
-                        phrase = item['data_samples'][0].text
+                        phrase = (
+                            item['data_samples'][0].text
+                            + f'pred_sted:{str(pred_sted[0])},{str(pred_sted[1])}, gt_sted:{str(gt_sted[0])},{str(gt_sted[1])}, tiou:{str(round(tiou,4))}'
+                        )
                         image_h = img.shape[0]
                         image_w = img.shape[1]
                         new_image = img.copy()
@@ -184,7 +205,7 @@ class video_visualizer:
                         ) = self.visual_per_box(
                             new_image,
                             img_name,
-                            f'Pred  {float(pred_scores[i][0])}',
+                            f'Pred  {round(float(pred_scores[i][0]),4)}',
                             image_h,
                             image_w,
                             pred_bbox,
@@ -199,7 +220,10 @@ class video_visualizer:
                         img = item['inputs'].permute(0, 2, 3, 1).numpy()[i]  # from bchw to bhwc
                         # img = Image.fromarray(img)
                         img = img[..., [2, 1, 0]]  # bgr to rgb
-                        phrase = item['data_samples'][0].text
+                        phrase = (
+                            item['data_samples'][0].text
+                            + f'pred_sted:{str(pred_sted[0])},{str(pred_sted[1])}, gt_sted:{str(gt_sted[0])},{str(gt_sted[1])}, tiou:{str(round(tiou,4))}'
+                        )
                         image_h = img.shape[0]
                         image_w = img.shape[1]
                         new_image = img.copy()
@@ -403,6 +427,53 @@ class video_visualizer:
         )
         plt.savefig(file_name, bbox_inches='tight')
         plt.close()
+
+    def PostProcessSTVG(self, outputs, frames_id=None, video_ids=None, time_mask=None):
+        """
+        :param outputs: must contain a key pred_sted mapped to a [B, T, 2] tensor of logits for the start and end predictions
+        :param frames_id: list of B lists which contains the increasing list of frame ids corresponding to the indexes of the decoder outputs
+        :param video_ids: list of B video_ids, used to ensemble predictions when video_max_len_train < video_max_len
+        :param time_mask: [B, T] tensor with False on the padded positions, used to take out padded frames from the possible predictions
+        :return: list of B [start_frame, end_frame] for each video
+        """
+        steds = torch.stack(outputs, dim=0).transpose(0, 1)  # BxTx2
+        starts_distribution = steds[:, :, 0].log_softmax(1)  # BxT
+        ends_distribution = steds[:, :, 1].log_softmax(1)  # BxT
+        # add log <=> multiply probs
+        score = (starts_distribution.unsqueeze(2) + ends_distribution.unsqueeze(1))  # BxTxT
+
+        '''plot heatmap'''
+        # 取出该样本的score，形状为TxT
+        score_sample = score[0]
+        # 将score转换为NumPy数组
+        score_array = score_sample.cpu().numpy()
+        # 使用Matplotlib绘制热力图
+        plt.imshow(score_array, cmap='hot')
+        # 添加颜色条
+        plt.colorbar()
+        # 添加标题
+        plt.title('Score Heatmap')
+        # 显示图像
+        plt.savefig('heatmap.jpg')
+
+        score, s_idx = score.max(dim=1)  # both BxT
+        score, e_idx = score.max(dim=1)  # both B
+        s_idx = torch.gather(s_idx, 1, e_idx.view(-1, 1)).squeeze(1)  # B
+        pred_steds = torch.stack([s_idx, e_idx], 1)  # Bx2
+        # max_length = max([len(x) for x in frames_id])
+        max_length = steds.shape[1]
+        frames_id = (
+            torch.tensor([row + [0] * (max_length - len(row)) for row in frames_id])
+            .long()
+            .to(pred_steds.device)
+        )  # padded up to BxT
+        # get corresponding frames id from the indexes
+        pred_steds = torch.gather(frames_id, 1, pred_steds)
+        pred_steds = pred_steds.float()
+        pred_steds[:, 1] += 1  # the end frame is excluded in evaluation
+
+        pred_steds = pred_steds.cpu().tolist()
+        return pred_steds
 
 
 if __name__ == '__main__':

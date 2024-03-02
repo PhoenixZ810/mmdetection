@@ -18,13 +18,15 @@ from .atss_vlfusion_head import convert_grounding_to_cls_scores
 from .grounding_dino_head import GroundingDINOHead, ContrastiveEmbed
 from ..layers import MLP
 from .deformable_detr_head import DeformableDETRHead
-
+from ..utils import multi_apply
+from mmdet.models.losses import QualityFocalLoss
 
 @MODELS.register_module()
 class VideoGroundingHead(GroundingDINOHead):
     def __init__(
         self,
         use_sted=False,
+        use_aux_time=False,
         use_enc_sted=False,
         sigma=1,
         sted_loss_weight=5.0,
@@ -35,6 +37,7 @@ class VideoGroundingHead(GroundingDINOHead):
         **kwargs,
     ):
         self.use_sted = use_sted
+        self.use_aux_time = use_aux_time
         self.use_enc_sted = use_enc_sted
         self.sigma = sigma
         self.sted_loss_weight = sted_loss_weight
@@ -68,15 +71,21 @@ class VideoGroundingHead(GroundingDINOHead):
             self.reg_branches = nn.ModuleList([copy.deepcopy(reg_branch) for _ in range(self.num_pred_layer)])
 
         '''branch for start and end time prediction'''
-        if self.use_sted:
-            self.sted_branch = MLP(self.embed_dims, self.embed_dims, 2, 2)
-        if self.use_enc_sted:
-            if self.share_pred_layer:
-                self.sted_branch = nn.ModuleList([self.sted_branch, self.sted_branch])
-            else:
-                self.sted_branch = nn.ModuleList(
-                    [copy.deepcopy(self.sted_branch), copy.deepcopy(self.sted_branch)]
+        sted_branch = MLP(self.embed_dims, self.embed_dims, 2, 2)
+        if self.use_sted and self.use_aux_time:
+            if not self.use_enc_sted:
+                self.sted_branches = nn.ModuleList(
+                    [copy.deepcopy(sted_branch) for _ in range(self.num_pred_layer-1)]
                 )
+            else:
+                self.sted_branches = nn.ModuleList(
+                    [copy.deepcopy(sted_branch) for _ in range(self.num_pred_layer)]
+                )
+        elif self.use_sted and not self.use_aux_time:
+            if self.use_enc_sted:
+                self.sted_branches = nn.ModuleList([copy.deepcopy(sted_branch), copy.deepcopy(sted_branch)])
+            else:
+                self.sted_branches = nn.ModuleList([copy.deepcopy(sted_branch)])
 
     def forward(
         self,
@@ -119,16 +128,26 @@ class VideoGroundingHead(GroundingDINOHead):
         """
         all_layers_outputs_classes = []
         all_layers_outputs_coords = []
+        all_layers_outputs_sted = []
 
-        if self.use_sted:
-            if self.use_enc_sted:
-                outputs_sted = self.sted_branch[1](hidden_states[-1])
-            else:
-                outputs_sted = self.sted_branch(hidden_states[-1])
-        else:
-            outputs_sted = None
+        # if self.use_sted:
+        #     if self.use_enc_sted:
+        #         outputs_sted = self.sted_branch[1](hidden_states[-1])
+        #     else:
+        #         outputs_sted = self.sted_branch(hidden_states[-1])
+        # else:
+        #     outputs_sted = None
 
         for layer_id in range(hidden_states.shape[0]):
+            if self.use_sted and self.use_aux_time:
+                output_sted = self.sted_branches[layer_id](hidden_states[layer_id])
+                all_layers_outputs_sted.append(output_sted)
+            elif self.use_sted and not self.use_aux_time:
+                if layer_id == hidden_states.shape[0] - 1:
+                    output_sted = self.sted_branches[0](hidden_states[layer_id])
+                    all_layers_outputs_sted.append(output_sted)
+            else:
+                outputs_sted = None
             reference = inverse_sigmoid(references[layer_id])
             # NOTE The last reference will not be used.
             hidden_state = hidden_states[layer_id]
@@ -149,6 +168,8 @@ class VideoGroundingHead(GroundingDINOHead):
             all_layers_outputs_classes.append(outputs_class)
             all_layers_outputs_coords.append(outputs_coord)
 
+        if self.use_sted:
+            outputs_sted = torch.stack(all_layers_outputs_sted)
         all_layers_outputs_classes = torch.stack(all_layers_outputs_classes)
         all_layers_outputs_coords = torch.stack(all_layers_outputs_coords)
 
@@ -219,7 +240,7 @@ class VideoGroundingHead(GroundingDINOHead):
         # set time_mask of valid video frames for each batchsize(duration)
         if self.use_sted:
             device = hidden_states.device
-            time_mask = torch.zeros(1, outs[2].shape[0]).bool().to(device)
+            time_mask = torch.zeros(1, outs[2].shape[1]).bool().to(device)
             # time_mask = torch.zeros(1, outs[0].shape[0]).bool().to(device)
             for i_dur, duration in enumerate(durations):
                 time_mask[i_dur, :duration] = True
@@ -305,14 +326,14 @@ class VideoGroundingHead(GroundingDINOHead):
                 all_layers_denoising_bbox_preds,
             ) = self.split_outputs(all_layers_cls_scores, all_layers_bbox_preds, dn_meta)
         else:
-            original_all_layers_matching_cls_scores = all_layers_cls_scores
-            original_all_layers_matching_bbox_preds = all_layers_bbox_preds
+            all_layers_matching_cls_scores = all_layers_cls_scores
+            all_layers_matching_bbox_preds = all_layers_bbox_preds
             # print('original_shape', original_all_layers_matching_cls_scores.shape)
             all_layers_denoising_cls_scores = None
             all_layers_denoising_bbox_preds = None
 
         max_duration = max(durations)
-        device = original_all_layers_matching_cls_scores.device
+        device = all_layers_matching_cls_scores.device
 
         keep_list = []
         for i_dur, (duration, inter) in enumerate(zip(durations, inter_idx)):
@@ -327,44 +348,45 @@ class VideoGroundingHead(GroundingDINOHead):
             )
         keep = torch.tensor(keep_list).long().to(device)
 
-        original_enc_cls_scores = enc_cls_scores
-        original_enc_bbox_preds = enc_bbox_preds
+        # original_enc_cls_scores = enc_cls_scores
+        # original_enc_bbox_preds = enc_bbox_preds
 
-        if len(keep) != original_all_layers_matching_cls_scores.shape[1]:
-            # 若有帧没有box，需要去掉这些帧
-            all_layers_matching_cls_scores = torch.index_select(
-                original_all_layers_matching_cls_scores, 1, keep
-            )
-            all_layers_matching_bbox_preds = torch.index_select(
-                original_all_layers_matching_bbox_preds, 1, keep
-            )
-            self.text_masks = torch.index_select(self.text_masks, 0, keep)
-            self.keep = keep
-            if use_dn:
-                all_layers_denoising_cls_scores = all_layers_denoising_cls_scores[:, keep]
-                all_layers_denoising_bbox_preds = all_layers_denoising_bbox_preds[:, keep]
-            if enc_cls_scores is not None:
-                enc_cls_scores = torch.index_select(original_enc_cls_scores, 0, keep)
-                enc_bbox_preds = torch.index_select(original_enc_bbox_preds, 0, keep)
-            # print('batch_img_metas=', len(batch_img_metas), 'keep=', len(keep))
-            img_metas = [batch_img_metas[i] for i in keep]
-            gt_instances = [batch_gt_instances[i] for i in keep]
-            batch_img_metas = img_metas
-            batch_gt_instances = gt_instances
-        else:
-            self.keep = keep
-            all_layers_matching_cls_scores = original_all_layers_matching_cls_scores
-            all_layers_matching_bbox_preds = original_all_layers_matching_bbox_preds
-            enc_bbox_preds = original_enc_bbox_preds
-            enc_cls_scores = original_enc_cls_scores
+        if use_dn:
+            all_layers_denoising_cls_scores = all_layers_denoising_cls_scores[:, keep]
+            all_layers_denoising_bbox_preds = all_layers_denoising_bbox_preds[:, keep]
+        # loss_dict = super(DeformableDETRHead, self).loss_by_feat(
+        #     all_layers_matching_cls_scores,
+        #     all_layers_matching_bbox_preds,
+        #     batch_gt_instances,
+        #     batch_img_metas,
+        #     batch_gt_instances_ignore,
+        # )
+        assert batch_gt_instances_ignore is None, (
+            f'{self.__class__.__name__} only supports ' 'for batch_gt_instances_ignore setting to None.'
+        )
 
-        loss_dict = super(DeformableDETRHead, self).loss_by_feat(
+        losses_cls, losses_bbox, losses_iou, pos_inds_list = multi_apply(
+            self.loss_by_feat_single,
             all_layers_matching_cls_scores,
             all_layers_matching_bbox_preds,
-            batch_gt_instances,
-            batch_img_metas,
-            batch_gt_instances_ignore,
+            batch_gt_instances=batch_gt_instances,
+            batch_img_metas=batch_img_metas,
+            keep=keep,
+            use_dn=use_dn
         )
+
+        loss_dict = dict()
+        # loss from the last decoder layer
+        loss_dict['loss_cls'] = losses_cls[-1]
+        loss_dict['loss_bbox'] = losses_bbox[-1]
+        loss_dict['loss_iou'] = losses_iou[-1]
+        # loss from other decoder layers
+        num_dec_layer = 0
+        for loss_cls_i, loss_bbox_i, loss_iou_i in zip(losses_cls[:-1], losses_bbox[:-1], losses_iou[:-1]):
+            loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
+            loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
+            loss_dict[f'd{num_dec_layer}.loss_iou'] = loss_iou_i
+            num_dec_layer += 1
 
         # NOTE DETRHead.loss_by_feat but not DeformableDETRHead.loss_by_feat
         # is called, because the encoder loss calculations are different
@@ -374,11 +396,12 @@ class VideoGroundingHead(GroundingDINOHead):
         if enc_cls_scores is not None:
             # NOTE The enc_loss calculation of the DINO is
             # different from that of Deformable DETR.
-            enc_loss_cls, enc_losses_bbox, enc_losses_iou = self.loss_by_feat_single(
+            enc_loss_cls, enc_losses_bbox, enc_losses_iou, enc_pos_inds_list = self.loss_by_feat_single(
                 enc_cls_scores,
                 enc_bbox_preds,
                 batch_gt_instances=batch_gt_instances,
                 batch_img_metas=batch_img_metas,
+                keep=keep,
             )
             loss_dict['enc_loss_cls'] = enc_loss_cls
             loss_dict['enc_loss_bbox'] = enc_losses_bbox
@@ -399,8 +422,14 @@ class VideoGroundingHead(GroundingDINOHead):
                 positive_map = positive_map.to(time_mask.device)
             elif time_mask is None:
                 positive_map = None
+            if outputs_sted.shape[2] != 1:
+                for i in range(outputs_sted.shape[1]):
+                    outputs_sted[:,i]=outputs_sted[:,i,pos_inds_list[-1][i]]
             loss_dict.update(self.loss_sted(outputs_sted, num_boxes, inter_idx, positive_map, time_mask))
             if self.use_enc_sted:
+                if enc_outputs_sted.shape[1] !=1:
+                    for i in range(enc_outputs_sted.shape[0]):
+                        enc_outputs_sted[i]=enc_outputs_sted[i,enc_pos_inds_list[i]]
                 loss_enc=(self.loss_sted(enc_outputs_sted, num_boxes, inter_idx, positive_map, time_mask, enc_flag=True))
                 loss_dict['enc_loss_sted'] = loss_enc['loss_sted']
 
@@ -444,46 +473,191 @@ class VideoGroundingHead(GroundingDINOHead):
                     loss_dict[ls] = loss_dict[ls] * 0
         return loss_dict
 
-    def loss_sted(self, outputs, num_boxes, inter_idx, positive_map, time_mask=None, enc_flag=False):
+    def loss_by_feat_single(
+        self,
+        cls_scores: Tensor,
+        bbox_preds: Tensor,
+        batch_gt_instances: InstanceList,
+        batch_img_metas: List[dict],
+        keep:Tensor,
+        use_dn: bool = False,
+    ) -> Tuple[Tensor]:
+        """Loss function for outputs from a single decoder layer of a single
+        feature level.
+
+        Args:
+            cls_scores (Tensor): Box score logits from a single decoder layer
+                for all images, has shape (bs, num_queries, cls_out_channels).
+            bbox_preds (Tensor): Sigmoid outputs from a single decoder layer
+                for all images, with normalized coordinate (cx, cy, w, h) and
+                shape (bs, num_queries, 4).
+            batch_gt_instances (list[:obj:`InstanceData`]): Batch of
+                gt_instance. It usually includes ``bboxes`` and ``labels``
+                attributes.
+            batch_img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+
+        Returns:
+            Tuple[Tensor]: A tuple including `loss_cls`, `loss_box` and
+            `loss_iou`.
+        """
+        if len(keep) != cls_scores.shape[0]:
+            # 若有帧没有box，需要去掉这些帧
+            sample_flag = True
+            sampled_cls_scores = torch.index_select(cls_scores, 0, keep)
+            sampled_bbox_preds = torch.index_select(bbox_preds, 0, keep)
+            # self.text_masks = torch.index_select(self.text_masks, 0, keep)
+            self.keep = keep
+
+            # print('batch_img_metas=', len(batch_img_metas), 'keep=', len(keep))
+            img_metas = [batch_img_metas[i] for i in keep]
+            gt_instances = [batch_gt_instances[i] for i in keep]
+            batch_img_metas = img_metas
+            batch_gt_instances = gt_instances
+        else:
+            sample_flag = False
+            self.keep = keep
+            sampled_cls_scores = cls_scores
+            sampled_bbox_preds = bbox_preds
+
+        num_imgs = sampled_cls_scores.size(0)
+        cls_scores_list = [sampled_cls_scores[i] for i in range(num_imgs)]
+        bbox_preds_list = [sampled_bbox_preds[i] for i in range(num_imgs)]
+        with torch.no_grad():
+            cls_reg_targets = self.get_targets(
+                cls_scores_list, bbox_preds_list, batch_gt_instances, batch_img_metas
+            )
+        (
+            labels_list,
+            label_weights_list,
+            bbox_targets_list,
+            bbox_weights_list,
+            num_total_pos,
+            num_total_neg,
+            pos_inds_list,
+            neg_inds_list
+        ) = cls_reg_targets
+        if sample_flag:
+            new_labels_list = [
+                torch.zeros(labels_list[0].shape).to(cls_scores.device) for i in range(cls_scores.shape[0])
+            ]
+            for i in range(len(self.keep)):
+                new_labels_list[self.keep[i]] = labels_list[i]
+            labels_list = new_labels_list
+            new_label_weights_list = [label_weights_list[0] for i in range(cls_scores.shape[0])]
+            label_weights_list = new_label_weights_list
+
+        labels = torch.stack(labels_list, 0)
+        label_weights = torch.stack(label_weights_list, 0)
+        bbox_targets = torch.cat(bbox_targets_list, 0)
+        bbox_weights = torch.cat(bbox_weights_list, 0)
+
+        # ===== this change =====
+        # Loss is not computed for the padded regions of the text.
+        assert self.text_masks.dim() == 2
+        text_masks = self.text_masks.new_zeros((self.text_masks.size(0), self.max_text_len))
+        text_masks[:, : self.text_masks.size(1)] = self.text_masks
+        text_mask = (text_masks > 0).unsqueeze(1)
+        text_mask = text_mask.repeat(1, cls_scores.size(1), 1)
+        cls_scores = torch.masked_select(cls_scores, text_mask).contiguous()
+
+        labels = torch.masked_select(labels, text_mask)
+        label_weights = label_weights[..., None].repeat(1, 1, text_mask.size(-1))
+        label_weights = torch.masked_select(label_weights, text_mask)
+
+        # classification loss
+        # construct weighted avg_factor to match with the official DETR repo
+        cls_avg_factor = num_total_pos * 1.0 + num_total_neg * self.bg_cls_weight
+        if self.sync_cls_avg_factor:
+            cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
+        cls_avg_factor = max(cls_avg_factor, 1)
+
+        if isinstance(self.loss_cls, QualityFocalLoss):
+            raise NotImplementedError('QualityFocalLoss for GroundingDINOHead is not supported yet.')
+        else:
+            loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
+
+        # Compute the average number of gt boxes across all gpus, for
+        # normalization purposes
+        num_total_pos = loss_cls.new_tensor([num_total_pos])
+        num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
+
+        # construct factors used for rescale bboxes
+        factors = []
+        for img_meta, bbox_pred in zip(batch_img_metas, sampled_bbox_preds):
+            (
+                img_h,
+                img_w,
+            ) = img_meta['img_shape']
+            factor = (
+                bbox_pred.new_tensor([img_w, img_h, img_w, img_h]).unsqueeze(0).repeat(bbox_pred.size(0), 1)
+            )
+            factors.append(factor)
+        factors = torch.cat(factors, 0)
+
+        # DETR regress the relative position of boxes (cxcywh) in the image,
+        # thus the learning target is normalized by the image size. So here
+        # we need to re-scale them for calculating IoU loss
+        bbox_preds = sampled_bbox_preds.reshape(-1, 4)
+        bboxes = bbox_cxcywh_to_xyxy(bbox_preds) * factors
+        bboxes_gt = bbox_cxcywh_to_xyxy(bbox_targets) * factors
+
+        # regression IoU loss, defaultly GIoU loss
+        loss_iou = self.loss_iou(bboxes, bboxes_gt, bbox_weights, avg_factor=num_total_pos)
+
+        # regression L1 loss
+        loss_bbox = self.loss_bbox(bbox_preds, bbox_targets, bbox_weights, avg_factor=num_total_pos)
+        return loss_cls, loss_bbox, loss_iou, pos_inds_list
+
+    def loss_sted(self, outputs_sted, num_boxes, inter_idx, positive_map, time_mask=None, enc_flag=False):
         """Compute the losses related to the start & end prediction, a KL divergence loss
         targets dicts must contain the key "pred_sted" containing a tensor of logits of dim [T, 2]
         """
         # assert "pred_sted" in outputs
-        sted = outputs.transpose(0, 1)  # [1, T, 2]
         losses = {}
-
-        target_start = torch.tensor([x[0] for x in inter_idx], dtype=torch.long).to(sted.device)
-        target_end = torch.tensor([x[1] for x in inter_idx], dtype=torch.long).to(sted.device)
-        sted = sted.masked_fill(
-            ~time_mask[:, :, None], -1e32
-        )  # put very low probability on the padded positions before softmax
-        eps = 1e-6  # avoid log(0) and division by 0
-
-        sigma = self.sigma
-
-        start_distrib = (
-            -((torch.arange(sted.shape[1])[None, :].to(sted.device) - target_start[:, None]) ** 2)
-            / (2 * sigma**2)
-        ).exp()  # gaussian target, ground-truth time distribution
-        start_distrib = F.normalize(start_distrib + eps, p=1, dim=1)
-        pred_start_prob = (sted[:, :, 0]).softmax(1)  # 预测每一帧是开始帧的概率
-        loss_start = pred_start_prob * ((pred_start_prob + eps) / start_distrib).log()  # KL div loss
-        loss_start = loss_start * time_mask  # not count padded values in the loss
-
-        end_distrib = (
-            -((torch.arange(sted.shape[1])[None, :].to(sted.device) - target_end[:, None]) ** 2)
-            / (2 * sigma**2)
-        ).exp()  # gaussian target
-        end_distrib = F.normalize(end_distrib + eps, p=1, dim=1)
-        pred_end_prob = (sted[:, :, 1]).softmax(1)
-        loss_end = pred_end_prob * ((pred_end_prob + eps) / end_distrib).log()  # KL div loss
-        loss_end = loss_end * time_mask  # do not count padded values in the loss
-
-        loss_sted = loss_start + loss_end
-        if enc_flag:
-            losses["loss_sted"] = loss_sted.mean() * self.enc_sted_loss_weight
+        if self.use_aux_time and not enc_flag:
+            num = outputs_sted.shape[0]
         else:
-            losses["loss_sted"] = loss_sted.mean() * self.sted_loss_weight
+            num = 1
+        for i in range(num):
+            if enc_flag:
+                sted = outputs_sted.transpose(0, 1)  # [1, T, 2]
+            else:
+                sted = outputs_sted[i].transpose(0, 1)  # [1, T, 2]
+            target_start = torch.tensor([x[0] for x in inter_idx], dtype=torch.long).to(sted.device)
+            target_end = torch.tensor([x[1] for x in inter_idx], dtype=torch.long).to(sted.device)
+            sted = sted.masked_fill(
+                ~time_mask[:, :, None], -1e32
+            )  # put very low probability on the padded positions before softmax
+            eps = 1e-6  # avoid log(0) and division by 0
+
+            sigma = self.sigma
+
+            start_distrib = (
+                -((torch.arange(sted.shape[1])[None, :].to(sted.device) - target_start[:, None]) ** 2)
+                / (2 * sigma**2)
+            ).exp()  # gaussian target, ground-truth time distribution
+            start_distrib = F.normalize(start_distrib + eps, p=1, dim=1)
+            pred_start_prob = (sted[:, :, 0]).softmax(1)  # 预测每一帧是开始帧的概率
+            loss_start = pred_start_prob * ((pred_start_prob + eps) / start_distrib).log()  # KL div loss
+            loss_start = loss_start * time_mask  # not count padded values in the loss
+
+            end_distrib = (
+                -((torch.arange(sted.shape[1])[None, :].to(sted.device) - target_end[:, None]) ** 2)
+                / (2 * sigma**2)
+            ).exp()  # gaussian target
+            end_distrib = F.normalize(end_distrib + eps, p=1, dim=1)
+            pred_end_prob = (sted[:, :, 1]).softmax(1)
+            loss_end = pred_end_prob * ((pred_end_prob + eps) / end_distrib).log()  # KL div loss
+            loss_end = loss_end * time_mask  # do not count padded values in the loss
+
+            loss_sted = loss_start + loss_end
+            if enc_flag:
+                losses["loss_sted"] = loss_sted.mean() * self.enc_sted_loss_weight
+            elif i != outputs_sted.shape[0] - 1:
+                losses[f"loss_sted{i}"] = loss_sted.mean() * self.sted_loss_weight
+            else:
+                losses["loss_sted"] = loss_sted.mean() * self.sted_loss_weight
 
         return losses
 
@@ -598,7 +772,7 @@ class VideoGroundingHead(GroundingDINOHead):
         """
         cls_scores = all_layers_cls_scores[-1]
         bbox_preds = all_layers_bbox_preds[-1]
-        model_outputs_sted = outputs_sted
+        model_outputs_sted = outputs_sted[-1]
         result_list = []
         for img_id in range(len(batch_img_metas)):
             cls_score = cls_scores[img_id]
@@ -697,3 +871,55 @@ class VideoGroundingHead(GroundingDINOHead):
         results.labels = det_labels
         results.sted = outputs_sted
         return results
+
+    def get_targets(
+        self,
+        cls_scores_list: List[Tensor],
+        bbox_preds_list: List[Tensor],
+        batch_gt_instances: InstanceList,
+        batch_img_metas: List[dict],
+    ) -> tuple:
+        """Compute regression and classification targets for a batch image.
+
+        Outputs from a single decoder layer of a single feature level are used.
+
+        Args:
+            cls_scores_list (list[Tensor]): Box score logits from a single
+                decoder layer for each image, has shape [num_queries,
+                cls_out_channels].
+            bbox_preds_list (list[Tensor]): Sigmoid outputs from a single
+                decoder layer for each image, with normalized coordinate
+                (cx, cy, w, h) and shape [num_queries, 4].
+            batch_gt_instances (list[:obj:`InstanceData`]): Batch of
+                gt_instance. It usually includes ``bboxes`` and ``labels``
+                attributes.
+            batch_img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+
+        Returns:
+            tuple: a tuple containing the following targets.
+
+            - labels_list (list[Tensor]): Labels for all images.
+            - label_weights_list (list[Tensor]): Label weights for all images.
+            - bbox_targets_list (list[Tensor]): BBox targets for all images.
+            - bbox_weights_list (list[Tensor]): BBox weights for all images.
+            - num_total_pos (int): Number of positive samples in all images.
+            - num_total_neg (int): Number of negative samples in all images.
+        """
+        (labels_list, label_weights_list, bbox_targets_list, bbox_weights_list, pos_inds_list, neg_inds_list) = (
+            multi_apply(
+                self._get_targets_single, cls_scores_list, bbox_preds_list, batch_gt_instances, batch_img_metas
+            )
+        )
+        num_total_pos = sum((inds.numel() for inds in pos_inds_list))
+        num_total_neg = sum((inds.numel() for inds in neg_inds_list))
+        return (
+            labels_list,
+            label_weights_list,
+            bbox_targets_list,
+            bbox_weights_list,
+            num_total_pos,
+            num_total_neg,
+            pos_inds_list,
+            neg_inds_list
+        )

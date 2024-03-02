@@ -35,26 +35,26 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
         self.frame_layer_cfg = frame_layer_cfg
         super().__init__(**kwargs)
         # The position embedding of local frame tokens
-        self.local_pos_embed = nn.Embedding(1, 256)  # the learned pos embed for frame cls token
-        self.frame_cls = nn.Embedding(1, 256)  # the frame level local cls token
-        self.video_cls = nn.Embedding(1, 256)  # the video level global cls token
+        # self.local_pos_embed = nn.Embedding(1, 256)  # the learned pos embed for frame cls token
+        # self.frame_cls = nn.Embedding(1, 256)  # the frame level local cls token
+        # self.video_cls = nn.Embedding(1, 256)  # the video level global cls token
 
     def _init_layers(self) -> None:
         """Initialize encoder layers."""
-        if self.time_attn_layer_cfg is not None:
-            self.time_attn_layers = ModuleList(
-                [DetrTransformerEncoderLayer(**self.time_attn_layer_cfg) for _ in range(self.num_layers)]
+        if self.time_attn_img_layer_cfg is not None:
+            self.time_attn_img_layers = ModuleList(
+                [DetrTransformerEncoderLayer(**self.time_attn_img_layer_cfg) for _ in range(self.num_layers)]
             )
-        if self.frame_layer_cfg is not None:
-            self.frame_layers = ModuleList(
-                [
-                    VideoSTCATDinoTransformerEncoderFrameLayer(**self.frame_layer_cfg)
-                    for _ in range(self.num_layers)
-                ]
-            )
-            self.video_layers = ModuleList(
-                [DetrTransformerEncoderLayer(**self.frame_layer_cfg) for _ in range(self.num_layers)]
-            )
+        # if self.frame_layer_cfg is not None:
+        #     self.frame_layers = ModuleList(
+        #         [
+        #             VideoSTCATDinoTransformerEncoderFrameLayer(**self.frame_layer_cfg)
+        #             for _ in range(self.num_layers)
+        #         ]
+        #     )
+        #     self.video_layers = ModuleList(
+        #         [DetrTransformerEncoderLayer(**self.frame_layer_cfg) for _ in range(self.num_layers)]
+        #     )
         self.layers = ModuleList(
             [DeformableDetrTransformerEncoderLayer(**self.layer_cfg) for _ in range(self.num_layers)]
         )
@@ -142,20 +142,20 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
         durations = [query.shape[0]]
         b = len(durations)
         t = max(durations)
-        n_frames = sum(durations)
-        device = output.device
-        # The position embedding, token mask, src feature for local frame token, in spatial layer
-        frames_src = self.frame_cls.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
-        frames_pos = self.local_pos_embed.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
-        frames_mask = torch.zeros((n_frames, 1)).bool().to(device)
+        # n_frames = sum(durations)
+        # device = output.device
+        # # The position embedding, token mask, src feature for local frame token, in spatial layer
+        # frames_src = self.frame_cls.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
+        # frames_pos = self.local_pos_embed.weight.unsqueeze(1).repeat(1, n_frames, 1)  # 1 x n_frames X d_model
+        # frames_mask = torch.zeros((n_frames, 1)).bool().to(device)
 
-        # The position embedding, token mask, in temporal layer
-        video_src = self.video_cls.weight.unsqueeze(0).repeat(b, 1, 1)  # b x 1 x d_model
-        temp_pos = time_embed(t + 1).repeat(1, b, 1)  # (T + 1) x b x d_model
-        temp_mask = torch.ones(b, t + 1).bool().to(device)
-        temp_mask[:, 0] = False  # the mask for the video cls token
-        for i_dur, dur in enumerate(durations):
-            temp_mask[i_dur, 1 : 1 + dur] = False
+        # # The position embedding, token mask, in temporal layer
+        # video_src = self.video_cls.weight.unsqueeze(0).repeat(b, 1, 1)  # b x 1 x d_model
+        # temp_pos = time_embed(t + 1).repeat(1, b, 1)  # (T + 1) x b x d_model
+        # temp_mask = torch.ones(b, t + 1).bool().to(device)
+        # temp_mask[:, 0] = False  # the mask for the video cls token
+        # for i_dur, dur in enumerate(durations):
+        #     temp_mask[i_dur, 1 : 1 + dur] = False
 
         # main process
         for layer_id, layer in enumerate(self.layers):
@@ -176,8 +176,8 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
                     ),  # note we use ~ for mask here
                     key_padding_mask=None,
                 )
-            if self.time_attn_layer_cfg is not None:
-                output = self.time_attn_layers[layer_id](
+            if self.time_attn_img_layer_cfg is not None:
+                output = self.time_attn_img_layers[layer_id](
                     query=output.transpose(0, 1),
                     query_pos=time_embed(t).repeat(1, b, 1).transpose(0, 1),
                     key_padding_mask=None,
@@ -191,41 +191,42 @@ class VideoSTCATGroundingDinoTransformerEncoder(VideoGroundingDinoTransformerEnc
                 level_start_index=level_start_index,
                 key_padding_mask=key_padding_mask,
             )
-            # generate frame query & global video query
-            frames_src_list = [self.frame_layers[layer_id](
-                query=frames_src.transpose(0, 1),  # t，1,256
-                query_pos=frames_pos.transpose(0, 1),
-                key=output,
-                key_pos=query_pos,
-                value=output,
-                key_padding_mask=key_padding_mask,
-            ).transpose(0,1).squeeze(0)]
+        #     # generate frame query & global video query
+        #     frames_src_list = [self.frame_layers[layer_id](
+        #         query=frames_src.transpose(0, 1),  # t，1,256
+        #         query_pos=frames_pos.transpose(0, 1),
+        #         key=output,
+        #         key_pos=query_pos,
+        #         value=output,
+        #         key_padding_mask=key_padding_mask,
+        #     ).transpose(0,1).squeeze(0)]
 
-            frames_src = torch.zeros(b, t + 1, 256).to(device)  # b x seq_len x C
-            # frames_src_list = torch.split(output[:, 0, :], durations)  # [(n_frames, C)]
+        #     frames_src = torch.zeros(b, t + 1, 256).to(device)  # b x seq_len x C
+        #     # frames_src_list = torch.split(output[:, 0, :], durations)  # [(n_frames, C)]
 
-            for i_dur, dur in enumerate(durations):
-                frames_src[i_dur, 0:1, :] = video_src[i_dur]  # pad the video cls token
-                frames_src[i_dur, 1 : 1 + dur, :] = frames_src_list[i_dur]  # [1,t+1,256]
+        #     for i_dur, dur in enumerate(durations):
+        #         frames_src[i_dur, 0:1, :] = video_src[i_dur]  # pad the video cls token
+        #         frames_src[i_dur, 1 : 1 + dur, :] = frames_src_list[i_dur]  # [1,t+1,256]
 
-            if self.frame_layer_cfg is not None:
-                frames_src = self.video_layers[layer_id](
-                    query=frames_src,
-                    query_pos=temp_pos.transpose(0, 1),
-                    key_padding_mask=temp_mask,
-                )
+        #     if self.frame_layer_cfg is not None:
+        #         frames_src = self.video_layers[layer_id](
+        #             query=frames_src,
+        #             query_pos=temp_pos.transpose(0, 1),
+        #             key_padding_mask=temp_mask,
+        #         )
 
-            # frames_src = frames_src.permute(1, 0, 2)  # permute LenxBxC to BxLenxC
-            # dispatch the temporal context to each single frame token
-            frames_src_list = []
-            for i_dur, dur in enumerate(durations):
-                video_src[i_dur] = frames_src[i_dur, 0:1] #video_src[1,1,256]
-                frames_src_list.append(frames_src[i_dur, 1 : 1 + dur])  # LenxC
+        #     # frames_src = frames_src.permute(1, 0, 2)  # permute LenxBxC to BxLenxC
+        #     # dispatch the temporal context to each single frame token
+        #     frames_src_list = []
+        #     for i_dur, dur in enumerate(durations):
+        #         video_src[i_dur] = frames_src[i_dur, 0:1] #video_src[1,1,256]
+        #         frames_src_list.append(frames_src[i_dur, 1 : 1 + dur])  # LenxC
 
-            frames_src = torch.cat(frames_src_list, dim=0).unsqueeze(0)
-        frames_src = frames_src.squeeze(0)
-        video_src = video_src.squeeze(0)
-        return output, memory_text, frames_src, video_src
+        #     frames_src = torch.cat(frames_src_list, dim=0).unsqueeze(0)
+        # frames_src = frames_src.squeeze(0)
+        # video_src = video_src.squeeze(0)
+        # return output, memory_text, frames_src, video_src
+        return output, memory_text
 
 
 class VideoSTCATDinoTransformerEncoderFrameLayer(DetrTransformerEncoderLayer):
@@ -262,7 +263,8 @@ class VideoSTCATDinoTransformerEncoderFrameLayer(DetrTransformerEncoderLayer):
 class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
     """Transformer decoder of VideoDINO."""
 
-    def __init__(self, use_weight_loss=False, *args, **kwargs):
+    def __init__(self, use_weight_loss=False,use_time_cross_img=True, *args, **kwargs):
+        self.use_time_cross_img = use_time_cross_img
         super().__init__(*args, **kwargs)
         self.use_weight_loss = use_weight_loss
 
@@ -271,12 +273,15 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
         self.layers = ModuleList(
             [VideoGroundingDinoTransformerDecoderLayer(**self.layer_cfg) for _ in range(self.num_layers)]
         )
-        self.temp_layer = ModuleList([TimeDecoderLayer() for _ in range(self.num_layers)])
+        self.temp_layer = ModuleList(
+            [TimeDecoderLayer(use_time_cross_img=self.use_time_cross_img) for _ in range(self.num_layers)]
+        )
         self.embed_dims = self.layers[0].embed_dims
         if self.post_norm_cfg is not None:
             raise ValueError('There is not post_norm in ' f'{self._get_name()}')
         self.ref_point_head = MLP(self.embed_dims * 2, self.embed_dims, self.embed_dims, 2)
         self.norm = nn.LayerNorm(self.embed_dims)
+        self.time_norm = nn.LayerNorm(self.embed_dims)
 
     def forward(
         self,
@@ -292,6 +297,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
         time_query: Optional[Tensor] = None,
         time_embed: Optional[Tensor] = None,
         time_query_pos: Optional[Tensor] = None,
+        time_query_frame_pos: Optional[Tensor] = None,
         memory_pos: Optional[Tensor] = None,
         **kwargs,
     ) -> Tuple[Tensor]:
@@ -337,6 +343,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
         """
         intermediate = []
         intermediate_reference_points = [reference_points]
+        intermediate_time = []
         intermediate_weights = []
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
@@ -370,11 +377,8 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                     pos = memory_pos,
                     query_pos=time_query_pos,
                     query_time_pos=time_embed,
+                    time_query_frame_pos = time_query_frame_pos,
                     self_attn_mask=self_attn_mask,
-                    spatial_shapes=spatial_shapes,
-                    level_start_index=level_start_index,
-                    valid_ratios=valid_ratios,
-                    reference_points=reference_points_input,
                     **kwargs,
                 )
 
@@ -388,6 +392,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
             if self.return_intermediate:
                 intermediate.append(self.norm(query))
                 intermediate_reference_points.append(new_reference_points)
+                intermediate_time.append(self.time_norm(time_query))
                 # NOTE this is for the "Look Forward Twice" module,
                 # in the DeformDETR, reference_points was appended.
             if self.use_weight_loss:
@@ -405,7 +410,7 @@ class VideoSTCATDinoTransformerDecoder(GroundingDinoTransformerDecoder):
                 return (
                     torch.stack(intermediate),
                     torch.stack(intermediate_reference_points),
-                    time_query,
+                    torch.stack(intermediate_time),
                     torch.stack(intermediate_weights),
                 )
             else:
@@ -424,30 +429,33 @@ class TimeDecoderLayer(BaseModule):
         dim_feedforward=2048,
         dropout=0.1,
         activation="relu",
-        no_tsa=False,
+        use_time_cross_img=True,
     ):
         super().__init__()
 
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         # self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
         # self.cross_attn_image = MultiScaleDeformableAttention(d_model, nhead, dropout=dropout)
-        self.cross_attn_image = MultiheadAttention(d_model, nhead, dropout=dropout)
-
+        if use_time_cross_img:
+            self.cross_attn_image = MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.cross_attn_text = MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
 
         self.norm1 = nn.LayerNorm(d_model)
-        # self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        if use_time_cross_img:
+            self.norm3 = nn.LayerNorm(d_model)
         self.norm4 = nn.LayerNorm(d_model)
         self.dropout1 = nn.Dropout(dropout)
         # self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
+        # self.dropout3 = nn.Dropout(dropout)
         self.dropout4 = nn.Dropout(dropout)
 
         self.activation = _get_activation_fn(activation)
+        self.use_time_cross_img = use_time_cross_img
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -463,11 +471,14 @@ class TimeDecoderLayer(BaseModule):
         pos: Optional[Tensor] = None,
         query_pos: Optional[Tensor] = None,
         query_time_pos: Optional[Tensor] = None,
+        time_query_frame_pos: Optional[Tensor] = None,
         durations=None,
-        **kwargs
+        memory_text: Tensor = None,
+        text_attention_mask: Tensor = None,
+        **kwargs,
     ):
 
-        q = k = self.with_pos_embed(tgt, query_pos + query_time_pos)
+        q = k = self.with_pos_embed(tgt, query_pos + query_time_pos + time_query_frame_pos)
         # q = k = self.with_pos_embed(tgt, query_time_pos)
         # Temporal Self attention
         tgt2, weights = self.self_attn(
@@ -500,32 +511,45 @@ class TimeDecoderLayer(BaseModule):
             clip_start += clip_length
 
         assert clip_start == bs
-        memory = memory.transpose(0, 1)  # txlxf -> lxtxf
-        pos = pos.transpose(0, 1)  # txlxf -> lxtxf
-        tgt2 = self.cross_attn_image(
-            query=self.with_pos_embed(tgt_cross, query_pos_cross),
-            key=self.with_pos_embed(memory, pos),
-            value=memory,
-            attn_mask=memory_mask,
-            key_padding_mask=memory_key_padding_mask,
-            **kwargs,
+
+        tgt_cross_text = self.cross_attn_text(
+            query=tgt_cross,
+            query_pos=query_pos_cross,
+            key=memory_text.transpose(0,1),
+            value=memory_text.transpose(0,1),
+            key_padding_mask=text_attention_mask,
         )
+        tgt_cross_text = self.norm2(tgt_cross_text.transpose(0,1)).transpose(0,1)
 
-        # reshape to the batched query
-        clip_start = 0
-        # tgt2_pad = torch.zeros(1, t * b, c).to(device)
+        if self.use_time_cross_img:
+            memory = memory.transpose(0, 1)  # txlxf -> lxtxf
+            pos = pos.transpose(0, 1)  # txlxf -> lxtxf
+            tgt2 = self.cross_attn_image(
+                query=self.with_pos_embed(tgt_cross_text, query_pos_cross),
+                key=self.with_pos_embed(memory, pos),
+                value=memory,
+                attn_mask=memory_mask,
+                key_padding_mask=memory_key_padding_mask,
+                **kwargs,
+            )
 
-        # for i_b in range(b):
-        #     clip_length = durations[i_b]
-        #     tgt2_pad[0, i_b * t : i_b * t + clip_length] = tgt2[0, clip_start : clip_start + clip_length]
-        #     clip_start += clip_length
+            # reshape to the batched query
+            clip_start = 0
+            # tgt2_pad = torch.zeros(1, t * b, c).to(device)
 
-        # tgt2 = tgt2_pad
-        tgt2 = tgt2.view(b, t, f).transpose(0, 1)  # 1x(b*t)xf -> bxtxf -> txbxf
+            # for i_b in range(b):
+            #     clip_length = durations[i_b]
+            #     tgt2_pad[0, i_b * t : i_b * t + clip_length] = tgt2[0, clip_start : clip_start + clip_length]
+            #     clip_start += clip_length
 
-        # tgt = tgt + self.dropout3(tgt2)
-        # tgt = self.norm3(tgt)
-        tgt = self.norm3(tgt2)
+            # tgt2 = tgt2_pad
+            tgt2 = tgt2.view(b, t, f).transpose(0, 1)  # 1x(b*t)xf -> bxtxf -> txbxf
+
+            # tgt = tgt + self.dropout3(tgt2)
+            # tgt = self.norm3(tgt)
+            tgt = self.norm3(tgt2)
+        else:
+            tgt = tgt_cross_text.transpose(0,1)
 
         # FFN
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
@@ -534,6 +558,7 @@ class TimeDecoderLayer(BaseModule):
 
         return tgt, weights
         # return tgt
+
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])

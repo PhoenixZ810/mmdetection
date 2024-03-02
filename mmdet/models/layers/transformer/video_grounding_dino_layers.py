@@ -34,15 +34,20 @@ except Exception:
 
 
 class VideoGroundingDinoTransformerEncoder(GroundingDinoTransformerEncoder):
-    def __init__(self, time_attn_layer_cfg=None, **kwargs) -> None:
-        self.time_attn_layer_cfg = time_attn_layer_cfg
+    def __init__(self, time_attn_text_layer_cfg=None,time_attn_img_layer_cfg=None, **kwargs) -> None:
+        self.time_attn_text_layer_cfg = time_attn_text_layer_cfg
+        self.time_attn_img_layer_cfg = time_attn_img_layer_cfg
         super().__init__(**kwargs)
 
     def _init_layers(self) -> None:
         """Initialize encoder layers."""
-        if self.time_attn_layer_cfg is not None:
-            self.time_attn_layers = ModuleList(
-                [DetrTransformerEncoderLayer(**self.time_attn_layer_cfg) for _ in range(self.num_layers)]
+        if self.time_attn_img_layer_cfg is not None:
+            self.time_attn_img_layers = ModuleList(
+                [DetrTransformerEncoderLayer(**self.time_attn_img_layer_cfg) for _ in range(self.num_layers)]
+            )
+        if self.time_attn_text_layer_cfg is not None:
+            self.time_attn_text_layers = ModuleList(
+                [DetrTransformerEncoderLayer(**self.time_attn_text_layer_cfg) for _ in range(self.num_layers)]
             )
         self.layers = ModuleList(
             [DeformableDetrTransformerEncoderLayer(**self.layer_cfg) for _ in range(self.num_layers)]
@@ -147,8 +152,14 @@ class VideoGroundingDinoTransformerEncoder(GroundingDinoTransformerEncoder):
                     ),  # note we use ~ for mask here
                     key_padding_mask=None,
                 )
-            if self.time_attn_layer_cfg is not None:
-                output = self.time_attn_layers[layer_id](
+                if self.time_attn_text_layer_cfg is not None:
+                    memory_text = self.time_attn_text_layers[layer_id](
+                        query=memory_text.transpose(0, 1),
+                        query_pos=time_embed.transpose(0, 1),
+                        key_padding_mask=None,
+                    ).transpose(0, 1)
+            if self.time_attn_img_layer_cfg is not None:
+                output = self.time_attn_img_layers[layer_id](
                     query=output.transpose(0, 1),
                     query_pos=time_embed.transpose(0, 1),
                     key_padding_mask=None,

@@ -8,6 +8,7 @@ lang_model_name = '/mnt/data/mmperc/huanghaian/code/GLIP/bert-base-uncased'
 
 model = dict(
     type='VideoGroundingDINO',
+    img_encoder_from_cache=False,
     num_queries=1,
     with_box_refine=True,
     as_two_stage=True,
@@ -65,8 +66,13 @@ model = dict(
     encoder=dict(
         num_layers=6,
         num_cp=6,
-        # # visual temporal self-attention config
-        # time_attn_layer_cfg=dict(
+        # visual temporal self-attention config
+        time_attn_img_layer_cfg=dict(
+            self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
+            ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
+        ),
+        # # text temporal self-attention config
+        # time_attn_text_layer_cfg=dict(
         #     self_attn_cfg=dict(num_heads=4, embed_dims=256, dropout=0.0),
         #     ffn_cfg=dict(embed_dims=256, feedforward_channels=1024, ffn_drop=0.0),
         # ),
@@ -86,7 +92,7 @@ model = dict(
     decoder=dict(
         num_layers=6,
         return_intermediate=True,
-        use_weight_loss=True,
+        use_weight_loss=False,
         layer_cfg=dict(
             # query temporal self-attention layer
             time_attn_cfg=dict(embed_dims=256, num_heads=8, dropout=0.0),
@@ -114,6 +120,7 @@ model = dict(
         ),  # 2.0 in DeformDETR
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
+        use_aux_time=False,
         use_enc_sted=True,
         sted_loss_weight=10.0,
         time_only=False,
@@ -155,11 +162,14 @@ optim_wrapper = dict(
 max_epochs = 30
 param_scheduler = [
     dict(type='LinearLR', start_factor=0.1, by_epoch=False, begin=0, end=50),
-    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[20,24], gamma=0.1),
+    dict(type='MultiStepLR', begin=0, end=max_epochs, by_epoch=True, milestones=[16,20], gamma=0.5),
 ]
 
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval=1)
 # dataset settings
 frames_num = 50
+train_frames_num = 50
+infer_frames_num = 50
 
 # scales = [96, 128]
 # max_size = 213
@@ -167,17 +177,17 @@ frames_num = 50
 # crop = 64
 # test_size = [128]
 
-# scales = [128, 160, 192, 224]
-# max_size = 373
-# resizes = [100, 150, 200]
-# crop = 96
-# test_size = [224]
+scales = [128, 160, 192, 224]
+max_size = 373
+resizes = [100, 150, 200]
+crop = 96
+test_size = [224]
 
-scales = [192, 224, 256, 288, 320]
-max_size = 533
-resizes = [200, 240, 280]
-crop = 160
-test_size = [320]
+# scales = [192, 224, 256, 288, 320]
+# max_size = 533
+# resizes = [200, 240, 280]
+# crop = 160
+# test_size = [320]
 
 # scales = [256, 288, 320, 352, 384, 416, 448]
 # max_size = 746
@@ -188,7 +198,7 @@ test_size = [320]
 video_train_pipeline = [
     dict(
         type='mp4_to_image',
-        video_max_len_train=frames_num,
+        video_max_len_train=train_frames_num,
         fps=5,
         time_crop=True,
         is_train=True,
@@ -222,7 +232,6 @@ video_train_pipeline = [
 video_test_pipeline = [
     dict(
         type='mp4_to_image',
-        video_max_len_val=frames_num,
         fps=5,
         is_train=False,
         spatial_transform=dict(
@@ -324,7 +333,7 @@ val_dataloader = dict(
         ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/HC-STVG_v1/test_proc.json',
         data_prefix=dict(img='HC-STVG_v1/video/'),
         test_mode=True,
-        video_max_len=frames_num,
+        video_max_len=infer_frames_num,
         pipeline=video_test_pipeline,
         backend_args=None,
     ),

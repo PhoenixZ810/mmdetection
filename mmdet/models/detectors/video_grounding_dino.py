@@ -17,7 +17,7 @@ from ..layers.transformer.video_grounding_dino_layers import (
     VideoGroundingDinoTransformerEncoder,
     VideoGroundingDinoTransformerDecoder,
 )
-
+from mmengine import MessageHub
 from .dino import DINO
 from .glip import create_positive_map, create_positive_map_label_to_token, run_ner
 from .grounding_dino import GroundingDINO
@@ -25,6 +25,7 @@ from .grounding_dino import GroundingDINO
 
 @MODELS.register_module()
 class VideoGroundingDINO(GroundingDINO):
+
     def __init__(
         self,
         use_time_embed=True,
@@ -33,6 +34,7 @@ class VideoGroundingDINO(GroundingDINO):
         freeze_backbone=False,
         freeze_language_model=False,
         freeze_encoder=False,
+        img_encoder_from_cache=False,
         *args,
         **kwargs,
     ) -> None:
@@ -54,6 +56,7 @@ class VideoGroundingDINO(GroundingDINO):
             self.encoder.requires_grad_(False)
         if self.use_time_embed:
             self.time_embed = TimeEmbeddingSine(max_len=self.max_frames, d_model=self.embed_dims)
+        self.img_encoder_from_cache = img_encoder_from_cache
         # print(self)
 
     def _init_layers(self) -> None:
@@ -144,6 +147,8 @@ class VideoGroundingDINO(GroundingDINO):
         # is `enc_outputs_class[..., 0]` selects according to scores of
         # binary classification.
         topk_indices = torch.topk(enc_outputs_class.max(-1)[0], k=self.num_queries, dim=1)[1]
+        if self.bbox_head.use_enc_sted and self.num_queries > 1:
+            top1_indices = torch.topk(enc_outputs_class.max(-1)[0], k=1, dim=1)[1]
 
         topk_score = torch.gather(
             enc_outputs_class, 1, topk_indices.unsqueeze(-1).repeat(1, 1, cls_out_features)
@@ -155,10 +160,11 @@ class VideoGroundingDINO(GroundingDINO):
         topk_coords_unact = topk_coords_unact.detach()
 
         if self.bbox_head.use_enc_sted:
-            enc_outputs_sted = self.bbox_head.sted_branch[0](output_memory)
-            topk_sted = torch.gather(
-                enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2)
-            )
+            enc_outputs_sted = self.bbox_head.sted_branches[-1](output_memory)
+            if self.num_queries == 1:
+                topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
+            else:
+                topk_sted = torch.gather(enc_outputs_sted, 1, top1_indices.unsqueeze(-1).repeat(1, 1, 2))
 
         query = self.query_embedding.weight[:, None, :]
         query = query.repeat(1, bs, 1).transpose(0, 1)
@@ -318,7 +324,9 @@ class VideoGroundingDINO(GroundingDINO):
         positive_map_label_to_token = create_positive_map_label_to_token(positive_map, plus=1)
         return positive_map_label_to_token, positive_map
 
-    def loss(self, batch_inputs: Tensor, batch_data_samples: SampleList) -> Union[dict, list]:
+    def loss(
+        self, batch_inputs: Tensor, batch_data_samples: SampleList, img_encoder_from_cache=False
+    ) -> Union[dict, list]:
         text_prompts = [data_samples.text for data_samples in batch_data_samples]
 
         gt_labels = [data_samples.gt_instances.labels for data_samples in batch_data_samples]
@@ -347,7 +355,7 @@ class VideoGroundingDINO(GroundingDINO):
                 )
                 new_text_prompts = [caption_string] * len(batch_inputs)
                 for gt_label in gt_labels:
-                    new_tokens_positive = [tokens_positive[label] for label in gt_label]
+                    new_tokens_positive = [tokens_positive[0] for label in gt_label]
                     _, positive_map = self.get_positive_map(tokenized, new_tokens_positive)
                     positive_maps.append(positive_map)
             else:
@@ -371,8 +379,13 @@ class VideoGroundingDINO(GroundingDINO):
             data_samples.gt_instances.text_token_mask = text_token_mask.unsqueeze(0).repeat(
                 len(positive_map), 1
             )
-
+        if self.img_encoder_from_cache:
+            message_hub = MessageHub.get_current_instance()
+            epoch = message_hub.get_info('epoch')
         visual_features = self.extract_feat(batch_inputs)
+        # torch.save(visual_features, f'data_cache/hcstvg_50_224/{epoch}_{batch_data_samples[0].video_id}.pt')
+        # losses = {'loss':visual_features[0][0][0][0]*0}
+        # return losses
         head_inputs_dict = self.forward_transformer(visual_features, text_dict, batch_data_samples)
 
         losses = self.bbox_head.loss(

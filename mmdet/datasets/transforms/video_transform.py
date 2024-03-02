@@ -13,7 +13,6 @@ class mp4_to_image(BaseTransform):
         self,
         stride=None,
         video_max_len_train=None,
-        video_max_len_val=None,
         fps=5,
         time_crop=False,
         spatial_transform=None,
@@ -22,8 +21,6 @@ class mp4_to_image(BaseTransform):
         self.stride = stride
         if video_max_len_train:
             self.video_max_len = video_max_len_train
-        elif video_max_len_val:
-            self.video_max_len = video_max_len_val
         self.fps = fps
         self.time_crop = time_crop
         self.is_train = is_train
@@ -212,7 +209,8 @@ class mp4_to_image(BaseTransform):
 
         boxes = [x["boxes"] for x in targets]
         image_ids = np.array([x["image_id"] for x in targets])
-        box_labels = np.array([0 for _ in range(len(targets))])
+        box_labels = np.array([0 for _ in range(len(frame_ids))])
+        box_labels[inter_idx] = 1
         inter_frames = []
         for i in inter_idx:
             inter_frames.append(f"{video_id}_{frame_ids[i]}")
