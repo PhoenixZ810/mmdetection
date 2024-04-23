@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from mmdet.registry import MODELS
+from mmdet.registry import MODELS, TASK_UTILS
 from mmdet.structures import OptSampleList, SampleList
 from mmdet.utils import ConfigType
 from ..layers import SinePositionalEncoding
@@ -28,6 +28,7 @@ class VideoGroundingDINO(GroundingDINO):
 
     def __init__(
         self,
+        train_cfg: Optional[ConfigType] = None,
         use_time_embed=True,
         use_dn=False,
         max_time_pos_frames=200,
@@ -39,7 +40,21 @@ class VideoGroundingDINO(GroundingDINO):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        if train_cfg:
+            if self.bbox_head.use_cls_loss:
+                assert 'assigner' in train_cfg, 'assigner should be provided ' 'when train_cfg is set.'
+                assigner = train_cfg['assigner']
+                self.assigner = TASK_UTILS.build(assigner)
+            else:
+                assert 'assigner_gt' in train_cfg, 'assigner_gt should be provided ' 'when train_cfg is set.'
+                assigner_gt = train_cfg['assigner_gt']
+                self.assigner_gt = TASK_UTILS.build(assigner_gt)
+                assert 'assigner_sted' in train_cfg, 'assigner_sted should be provided ' 'when train_cfg is set.'
+                assigner_sted = train_cfg['assigner_sted']
+                self.assigner_sted = TASK_UTILS.build(assigner_sted)
 
+            if train_cfg.get('sampler', None) is not None:
+                raise RuntimeError('DETR do not build sampler.')
         self.dn_query_generator = None
 
         self.use_dn = use_dn
@@ -133,38 +148,52 @@ class VideoGroundingDINO(GroundingDINO):
         output_memory, output_proposals = self.gen_encoder_output_proposals(
             memory, memory_mask, spatial_shapes
         )
+        if self.bbox_head.use_cls_loss:
+            enc_outputs_class = self.bbox_head.cls_branches[self.decoder.num_layers](
+                output_memory, memory_text, text_token_mask
+            )
+            cls_out_features = self.bbox_head.cls_branches[self.decoder.num_layers].max_text_len
+            enc_outputs_coord_unact = (
+                self.bbox_head.reg_branches[self.decoder.num_layers](output_memory) + output_proposals
+            )
 
-        enc_outputs_class = self.bbox_head.cls_branches[self.decoder.num_layers](
-            output_memory, memory_text, text_token_mask
-        )
-        cls_out_features = self.bbox_head.cls_branches[self.decoder.num_layers].max_text_len
-        enc_outputs_coord_unact = (
-            self.bbox_head.reg_branches[self.decoder.num_layers](output_memory) + output_proposals
-        )
+            # NOTE The DINO selects top-k proposals according to scores of
+            # multi-class classification, while DeformDETR, where the input
+            # is `enc_outputs_class[..., 0]` selects according to scores of
+            # binary classification.
+            topk_indices = torch.topk(enc_outputs_class.max(-1)[0], k=self.num_queries, dim=1)[1]
+            if self.bbox_head.use_enc_sted and self.num_queries > 1:
+                top1_indices = torch.topk(enc_outputs_class.max(-1)[0], k=1, dim=1)[1]
 
-        # NOTE The DINO selects top-k proposals according to scores of
-        # multi-class classification, while DeformDETR, where the input
-        # is `enc_outputs_class[..., 0]` selects according to scores of
-        # binary classification.
-        topk_indices = torch.topk(enc_outputs_class.max(-1)[0], k=self.num_queries, dim=1)[1]
-        if self.bbox_head.use_enc_sted and self.num_queries > 1:
-            top1_indices = torch.topk(enc_outputs_class.max(-1)[0], k=1, dim=1)[1]
+            topk_score = torch.gather(
+                enc_outputs_class, 1, topk_indices.unsqueeze(-1).repeat(1, 1, cls_out_features)
+            )
+            topk_coords_unact = torch.gather(
+                enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4)
+            )
+            topk_coords = topk_coords_unact.sigmoid()
+            topk_coords_unact = topk_coords_unact.detach()
 
-        topk_score = torch.gather(
-            enc_outputs_class, 1, topk_indices.unsqueeze(-1).repeat(1, 1, cls_out_features)
-        )
-        topk_coords_unact = torch.gather(
-            enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4)
-        )
-        topk_coords = topk_coords_unact.sigmoid()
-        topk_coords_unact = topk_coords_unact.detach()
-
-        if self.bbox_head.use_enc_sted:
+            if self.bbox_head.use_enc_sted:
+                enc_outputs_sted = self.bbox_head.sted_branches[-1](output_memory)
+                if self.num_queries == 1:
+                    topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
+                else:
+                    topk_sted = torch.gather(enc_outputs_sted, 1, top1_indices.unsqueeze(-1).repeat(1, 1, 2))
+        else:
+            assert self.bbox_head.use_enc_sted==True
             enc_outputs_sted = self.bbox_head.sted_branches[-1](output_memory)
-            if self.num_queries == 1:
-                topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
-            else:
-                topk_sted = torch.gather(enc_outputs_sted, 1, top1_indices.unsqueeze(-1).repeat(1, 1, 2))
+            enc_outputs_coord_unact = (
+                self.bbox_head.reg_branches[self.decoder.num_layers](output_memory) + output_proposals
+            )
+            enc_outputs_sted_sum=enc_outputs_sted.sum(2)
+            topk_indices = torch.topk(enc_outputs_sted_sum, k=self.num_queries, dim=1)[1]
+            topk_coords_unact = torch.gather(
+                enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4)
+            )
+            topk_sted = torch.gather(enc_outputs_sted, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 2))
+            topk_coords = topk_coords_unact.sigmoid()
+            topk_coords_unact = topk_coords_unact.detach()
 
         query = self.query_embedding.weight[:, None, :]
         query = query.repeat(1, bs, 1).transpose(0, 1)
@@ -215,24 +244,44 @@ class VideoGroundingDINO(GroundingDINO):
         # NOTE DINO calculates encoder losses on scores and coordinates
         # of selected top-k encoder queries, while DeformDETR is of all
         # encoder queries.
-        if self.bbox_head.use_enc_sted:
-            head_inputs_dict = (
-                dict(
-                    enc_outputs_class=topk_score,
-                    enc_outputs_coord=topk_coords,
-                    dn_meta=dn_meta,
-                    enc_outputs_sted=topk_sted,
+        if self.bbox_head.use_cls_loss:
+            if self.bbox_head.use_enc_sted:
+                head_inputs_dict = (
+                    dict(
+                        enc_outputs_class=topk_score,
+                        enc_outputs_coord=topk_coords,
+                        dn_meta=dn_meta,
+                        enc_outputs_sted=topk_sted,
+                    )
+                    if self.training
+                    else dict()
                 )
-                if self.training
-                else dict()
-            )
+            else:
+                head_inputs_dict = (
+                    dict(enc_outputs_class=topk_score, enc_outputs_coord=topk_coords, dn_meta=dn_meta)
+                    if self.training
+                    else dict()
+                )
+            # append text_feats to head_inputs_dict
         else:
-            head_inputs_dict = (
-                dict(enc_outputs_class=topk_score, enc_outputs_coord=topk_coords, dn_meta=dn_meta)
-                if self.training
-                else dict()
-            )
-        # append text_feats to head_inputs_dict
+            if self.bbox_head.use_enc_sted:
+                head_inputs_dict = (
+                    dict(
+                        enc_outputs_class=None,
+                        enc_outputs_coord=topk_coords,
+                        dn_meta=dn_meta,
+                        enc_outputs_sted=topk_sted,
+                    )
+                    if self.training
+                    else dict()
+                )
+            else:
+                head_inputs_dict = (
+                    dict(enc_outputs_class=None, enc_outputs_coord=topk_coords, dn_meta=dn_meta)
+                    if self.training
+                    else dict()
+                )
+            # append text_feats to head_inputs_dict
         head_inputs_dict['memory_text'] = memory_text
         head_inputs_dict['text_token_mask'] = text_token_mask
         return decoder_inputs_dict, head_inputs_dict

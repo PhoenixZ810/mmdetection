@@ -120,7 +120,8 @@ model = dict(
         ),  # 2.0 in DeformDETR
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
         use_sted=True,
-        use_aux_time=False,
+        use_cls_loss=False,
+        use_aux_time=True,
         use_enc_sted=True,
         sted_loss_weight=10.0,
         time_only=False,
@@ -140,6 +141,20 @@ model = dict(
                 dict(type='BinaryFocalLossCost', weight=2.0),
                 dict(type='BBoxL1Cost', weight=5.0, box_format='xywh'),
                 dict(type='IoUCost', iou_mode='giou', weight=2.0),
+            ],
+        ),
+        assigner_gt=dict(
+            type='HungarianAssigner',
+            match_costs=[
+                dict(type='STEDCost', weight=2.0),
+                dict(type='BBoxL1Cost', weight=5.0, box_format='xywh'),
+                dict(type='IoUCost', iou_mode='giou', weight=2.0),
+            ],
+        ),
+        assigner_sted=dict(
+            type='HungarianAssigner',
+            match_costs=[
+                dict(type='STEDCost', weight=1.0),
             ],
         )
     ),
@@ -282,8 +297,8 @@ vidstg_video_dataset = dict(
 hcstvg_video_dataset = dict(
     type='HCVideoModulatedSTGrounding',
     data_root=data_root,
-    # ann_file='/mnt/workspace/zhaoxiangyu/code_new/video_mmdetection/debug/debug.json',
-    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/HC-STVG_v1/train_proc.json',
+    ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/debug/hcstvg_val_debug.json',
+    # ann_file='/mnt/data/mmperc/zhaoxiangyu/code_new/video_mmdetection/data/HC-STVG_v1/train_proc.json',
     data_prefix=dict(img='HC-STVG_v1/video/'),
     filter_cfg=dict(filter_empty_gt=False),
     pipeline=video_train_pipeline,
